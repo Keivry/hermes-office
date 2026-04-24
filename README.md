@@ -23,6 +23,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 - Extracted to `/opt/tools/ppt-master`
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
+- `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
 - Current pinned source ref in `Dockerfile`: `43ee46b61cfc130af91c18be7d807bdb538f6a7e`
 
 ### ImageMagick
@@ -31,7 +32,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
-- Symlinked to `PATH` as `/usr/local/bin/docling`
+- Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
 - Current pinned version in `Dockerfile`: `2.91.0`
 - Current image installs the base `docling` package (not the optional VLM extras)
 
@@ -54,7 +55,9 @@ The image adds these packages beyond the official Hermes base image:
 
 - `curl`
 - `imagemagick`
+- `libcairo2-dev`
 - `pandoc`
+- `pkg-config`
 - `poppler-utils`
 - `qpdf`
 - `xz-utils`
@@ -163,7 +166,7 @@ The workflow publishes to GHCR as:
 
 Triggers:
 
-- push to `main` affecting `Dockerfile`, workflow, or `README.md`
+- push to `main` or `master` affecting `Dockerfile`, workflow, or `README.md`
 - daily scheduled check
 - manual `workflow_dispatch`
 

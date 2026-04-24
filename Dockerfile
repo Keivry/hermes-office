@@ -22,7 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     imagemagick \
+    libcairo2-dev \
     pandoc \
+    pkg-config \
     poppler-utils \
     qpdf \
     xz-utils \
