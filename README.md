@@ -37,6 +37,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 - Installed in two steps for stability:
   1. install `torch` and `torchvision` from `https://download.pytorch.org/whl/cpu`
   2. install `docling` itself from the normal Python package index
+- These installs explicitly clear the inherited `UV_EXCLUDE_NEWER` setting, because the upstream Hermes repo pins its own dependency freshness window (`[tool.uv] exclude-newer = "7 days"`) and that otherwise hides newer torch/docling wheels during image build
 - This avoids uv multi-index resolution edge cases where the PyTorch index shadows common packages and causes false dependency conflicts
 - Current image installs the base `docling` package (not the optional VLM extras)
 
