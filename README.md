@@ -34,6 +34,8 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
 - Current pinned version in `Dockerfile`: `2.91.0`
+- Installed from PyPI while also allowing PyTorch CPU wheels from `https://download.pytorch.org/whl/cpu`
+- The install uses `uv --index-strategy unsafe-best-match` because the PyTorch index also publishes some common packages, and uv's default first-index strategy can otherwise mis-resolve dependencies
 - Current image installs the base `docling` package (not the optional VLM extras)
 
 ### pdfcpu
