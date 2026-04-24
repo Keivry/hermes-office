@@ -16,6 +16,8 @@ LABEL org.opencontainers.image.source="https://github.com/Keivry/hermes-office"
 LABEL org.opencontainers.image.vendor="Keivry"
 LABEL org.opencontainers.image.licenses="Apache-2.0, MIT"
 
+USER root
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -40,21 +42,23 @@ RUN mkdir -p /opt/tools \
     && curl -fsSL "${PPT_MASTER_ARCHIVE_URL}" -o /tmp/ppt-master.tar.gz \
     && tar -xzf /tmp/ppt-master.tar.gz -C /opt/tools \
     && mv "/opt/tools/ppt-master-${PPT_MASTER_REF}" /opt/tools/ppt-master \
-    && rm -f /tmp/ppt-master.tar.gz
+    && rm -f /tmp/ppt-master.tar.gz \
+    && chown -R hermes:hermes /opt/tools
 
-RUN . /opt/hermes/.venv/bin/activate \
-    && uv venv /opt/tools/ppt-master/.venv \
+USER hermes
+
+RUN uv venv /opt/tools/ppt-master/.venv \
     && uv pip install --python /opt/tools/ppt-master/.venv/bin/python --no-cache-dir -r /opt/tools/ppt-master/requirements.txt \
     && mkdir -p /opt/tools/docling \
     && uv venv /opt/tools/docling/.venv \
-    && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir "docling==${DOCLING_VERSION}" \
-    && ln -sf /opt/tools/docling/.venv/bin/docling /usr/local/bin/docling
+    && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir "docling==${DOCLING_VERSION}"
 
 ENV OFFICECLI_SKIP_UPDATE=1
 ENV PPT_MASTER_HOME=/opt/tools/ppt-master
 ENV PPT_MASTER_VENV=/opt/tools/ppt-master/.venv
 ENV DOCLING_HOME=/opt/tools/docling
 ENV DOCLING_VENV=/opt/tools/docling/.venv
+ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"
 
 RUN /opt/tools/ppt-master/.venv/bin/python --version \
     && /opt/tools/ppt-master/.venv/bin/python -c "import pptx, fitz, PIL, requests, bs4; print('ppt-master deps ok')" \

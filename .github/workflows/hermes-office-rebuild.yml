@@ -2,7 +2,7 @@ name: Hermes Office Build & Publish
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     paths:
       - "Dockerfile"
       - ".github/workflows/hermes-office-rebuild.yml"
