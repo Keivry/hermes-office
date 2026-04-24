@@ -33,12 +33,11 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.91.0`
-- Installed in two steps for stability:
-  1. install `torch` and `torchvision` from `https://download.pytorch.org/whl/cpu`
-  2. install `docling` itself from the normal Python package index
-- These installs explicitly clear the inherited `UV_EXCLUDE_NEWER` setting, because the upstream Hermes repo pins its own dependency freshness window (`[tool.uv] exclude-newer = "7 days"`) and that otherwise hides newer torch/docling wheels during image build
-- This avoids uv multi-index resolution edge cases where the PyTorch index shadows common packages and causes false dependency conflicts
+- Current pinned version in `Dockerfile`: `2.89.0`
+- Installed in two steps for stability while **preserving** the upstream Hermes `uv` freshness policy:
+  1. install exact pinned CPU wheels for `torch==2.10.0+cpu` and `torchvision==0.25.0+cpu`
+  2. install `docling==2.89.0` from the normal Python package index
+- This keeps the `exclude-newer = "7 days"` supply-chain protection in effect, avoids mixed-index resolution edge cases, and avoids pulling newer Docling releases that are outside the current freshness window
 - Current image installs the base `docling` package (not the optional VLM extras)
 
 ### pdfcpu
@@ -67,7 +66,7 @@ The image adds these packages beyond the official Hermes base image:
 - `qpdf`
 - `xz-utils`
 
-`git` and `nodejs` are already present in the upstream `nousresearch/hermes-agent` image, so this repo does not reinstall them.
+Docling-specific Python artifacts are pinned in the Dockerfile rather than installed from floating latest releases, to stay compatible with the upstream Hermes `uv` freshness window.
 
 ## Runtime environment
 

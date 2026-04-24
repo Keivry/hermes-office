@@ -6,7 +6,9 @@ ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
 ARG PPT_MASTER_REF=43ee46b61cfc130af91c18be7d807bdb538f6a7e
 ARG PPT_MASTER_ARCHIVE_URL=https://codeload.github.com/hugohe3/ppt-master/tar.gz/${PPT_MASTER_REF}
-ARG DOCLING_VERSION=2.91.0
+ARG DOCLING_VERSION=2.89.0
+ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.10.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=8d316e5bf121f1eab1147e49ad0511a9d92e4c45cc357d1ab0bee440da71a095
+ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.25.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=90eec299e1f82cfaf080ccb789df3838cb9a54b57e2ebe33852cd392c692de5c
 ARG PDFCPU_VERSION=0.12.0
 ARG PDFCPU_ASSET_URL=https://github.com/pdfcpu/pdfcpu/releases/download/v${PDFCPU_VERSION}/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64.tar.xz
 
@@ -53,10 +55,9 @@ RUN uv venv /opt/tools/ppt-master/.venv \
     && uv pip install --python /opt/tools/ppt-master/.venv/bin/python --no-cache-dir -r /opt/tools/ppt-master/requirements.txt \
     && mkdir -p /opt/tools/docling \
     && uv venv /opt/tools/docling/.venv \
-    && env -u UV_EXCLUDE_NEWER uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
-        "torch>=2.2.2,<3" "torchvision>=0,<1" \
-    && env -u UV_EXCLUDE_NEWER uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
+    && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
+        "${TORCH_CPU_WHL}" "${TORCHVISION_CPU_WHL}" \
+    && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
         "docling==${DOCLING_VERSION}"
 
 ENV OFFICECLI_SKIP_UPDATE=1
