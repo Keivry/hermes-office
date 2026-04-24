@@ -5,8 +5,10 @@ A `nousresearch/hermes-agent`-based Docker image bundled with:
 - [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI)
 - [PPT Master](https://github.com/hugohe3/ppt-master)
 - [ImageMagick](https://github.com/ImageMagick/ImageMagick)
-- [UniPDF CLI](https://github.com/unidoc/unipdf-cli)
 - [Docling](https://github.com/docling-project/docling)
+- [pdfcpu](https://github.com/pdfcpu/pdfcpu)
+- [qpdf](https://github.com/qpdf/qpdf)
+- [poppler-utils](https://poppler.freedesktop.org/)
 
 This repository reuses the same GitHub Actions build/publish pattern as `Keivry/hermes-matrix`, but targets Office document automation, image processing, and document/PDF conversion.
 
@@ -27,17 +29,24 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 - Installed from the distro package as `imagemagick`
 - CLI entrypoint is usually `magick`; on some Debian-family builds you may still use `convert`, `identify`, `montage`, etc.
 
-### UniPDF CLI
-- Built from source in a multi-stage Docker build
-- Installed to `/usr/local/bin/unipdf`
-- Current pinned version in `Dockerfile`: `v0.14.0`
-- **Important:** UniPDF CLI requires a runtime license to operate
-
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Symlinked to `PATH` as `/usr/local/bin/docling`
 - Current pinned version in `Dockerfile`: `2.91.0`
 - Current image installs the base `docling` package (not the optional VLM extras)
+
+### pdfcpu
+- Installed as a standalone binary at `/usr/local/bin/pdfcpu`
+- Current pinned version in `Dockerfile`: `0.12.0`
+- Best suited for open-source PDF CLI operations such as merge, split, validate, optimize, watermark, rotate, forms, and image extraction
+
+### qpdf
+- Installed from the distro package as `qpdf`
+- Best suited for content-preserving structural PDF transformations, encryption/decryption, page selection, and repair-friendly workflows
+
+### poppler-utils
+- Installed from the distro package as `poppler-utils`
+- Provides utilities such as `pdfinfo`, `pdftotext`, `pdfimages`, `pdftoppm`, `pdfseparate`, and `pdfunite`
 
 ## Included extra system packages
 
@@ -46,6 +55,9 @@ The image adds these packages beyond the official Hermes base image:
 - `curl`
 - `imagemagick`
 - `pandoc`
+- `poppler-utils`
+- `qpdf`
+- `xz-utils`
 
 `git` and `nodejs` are already present in the upstream `nousresearch/hermes-agent` image, so this repo does not reinstall them.
 
@@ -77,23 +89,35 @@ identify input.png
 montage *.png -tile 2x -geometry +16+16 contact-sheet.png
 ```
 
-### UniPDF CLI
+### pdfcpu
 Typical usage:
 
 ```bash
-unipdf merge merged.pdf a.pdf b.pdf
-unipdf split report.pdf section.pdf 1-3,5
-unipdf render -o pages.zip report.pdf
+pdfcpu validate report.pdf
+pdfcpu merge merged.pdf a.pdf b.pdf
+pdfcpu split -m page report.pdf outdir 1 3 5
+pdfcpu images extract report.pdf outdir
+pdfcpu form export form.pdf fields.json
 ```
 
-Runtime licensing is required. Image build verifies only that the binary exists; actual PDF operations still require runtime license env vars.
-Supported environment variables include:
+### qpdf
+Typical usage:
 
 ```bash
-export UNIDOC_LICENSE_API_KEY="unidoc..."
-# or
-export UNIDOC_LICENSE_FILE="/path/to/license.key"
-export UNIDOC_LICENSE_CUSTOMER="your-customer-name"
+qpdf input.pdf --pages . 1-3,5 -- output.pdf
+qpdf --encrypt user owner 256 -- input.pdf protected.pdf
+qpdf --password=secret --decrypt protected.pdf plain.pdf
+```
+
+### poppler-utils
+Typical usage:
+
+```bash
+pdfinfo report.pdf
+pdftotext report.pdf report.txt
+pdfimages -all report.pdf img_prefix
+pdftoppm -png report.pdf page
+pdfunite a.pdf b.pdf merged.pdf
 ```
 
 ### Docling
@@ -125,6 +149,11 @@ cd /opt/tools/ppt-master
 docling sample.pdf -o sample.md
 ```
 
+### pdfcpu
+```bash
+pdfcpu merge merged.pdf a.pdf b.pdf
+```
+
 ## Build and publish
 
 The workflow publishes to GHCR as:
@@ -143,4 +172,5 @@ Triggers:
 - The scheduled workflow currently checks whether the **base Hermes image** changed, just like `hermes-matrix`.
 - Manual dispatch can be used to rebuild after updating pinned upstream versions.
 - `PaddleOCR` is intentionally **not** bundled here; you said it will be deployed separately on another server later.
-- If needed later, upstream-change detection for OfficeCLI releases, PPT Master commits, UniPDF CLI tags, and Docling versions can be added.
+- `unipdf-cli` was intentionally removed because it requires runtime licensing; the image now prefers the open-source stack of `pdfcpu + qpdf + poppler-utils`.
+- If needed later, upstream-change detection for OfficeCLI releases, PPT Master commits, pdfcpu releases, and Docling versions can be added.

@@ -1,23 +1,3 @@
-FROM golang:1.24-bookworm AS unipdf-builder
-
-ARG DEBIAN_FRONTEND=noninteractive
-ARG UNIPDF_CLI_VERSION=v0.14.0
-ARG UNIPDF_CLI_ARCHIVE_URL=https://codeload.github.com/unidoc/unipdf-cli/tar.gz/${UNIPDF_CLI_VERSION}
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    tar \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN mkdir -p /src /out \
-    && curl -fsSL "${UNIPDF_CLI_ARCHIVE_URL}" -o /tmp/unipdf-cli.tar.gz \
-    && tar -xzf /tmp/unipdf-cli.tar.gz -C /src \
-    && mv /src/unipdf-cli-* /src/unipdf-cli \
-    && cd /src/unipdf-cli/cmd/unipdf \
-    && go build -o /out/unipdf \
-    && rm -rf /tmp/unipdf-cli.tar.gz /src/unipdf-cli
-
 FROM nousresearch/hermes-agent:latest
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -27,10 +7,11 @@ ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
 ARG PPT_MASTER_REF=43ee46b61cfc130af91c18be7d807bdb538f6a7e
 ARG PPT_MASTER_ARCHIVE_URL=https://codeload.github.com/hugohe3/ppt-master/tar.gz/${PPT_MASTER_REF}
 ARG DOCLING_VERSION=2.91.0
-ARG UNIPDF_CLI_VERSION=v0.14.0
+ARG PDFCPU_VERSION=0.12.0
+ARG PDFCPU_ASSET_URL=https://github.com/pdfcpu/pdfcpu/releases/download/v${PDFCPU_VERSION}/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64.tar.xz
 
 LABEL org.opencontainers.image.title="hermes-office"
-LABEL org.opencontainers.image.description="Hermes Agent image bundled with OfficeCLI, PPT Master, ImageMagick, UniPDF CLI, and Docling"
+LABEL org.opencontainers.image.description="Hermes Agent image bundled with OfficeCLI, PPT Master, ImageMagick, Docling, pdfcpu, qpdf, and poppler-utils"
 LABEL org.opencontainers.image.source="https://github.com/Keivry/hermes-office"
 LABEL org.opencontainers.image.vendor="Keivry"
 LABEL org.opencontainers.image.licenses="Apache-2.0, MIT"
@@ -40,6 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     imagemagick \
     pandoc \
+    poppler-utils \
+    qpdf \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL -o /usr/local/bin/officecli \
@@ -47,7 +31,10 @@ RUN curl -fsSL -o /usr/local/bin/officecli \
     && chmod +x /usr/local/bin/officecli \
     && officecli --version
 
-COPY --from=unipdf-builder /out/unipdf /usr/local/bin/unipdf
+RUN curl -fsSL "${PDFCPU_ASSET_URL}" -o /tmp/pdfcpu.tar.xz \
+    && tar -xJf /tmp/pdfcpu.tar.xz -C /tmp \
+    && install -m 0755 /tmp/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64/pdfcpu /usr/local/bin/pdfcpu \
+    && rm -rf /tmp/pdfcpu.tar.xz /tmp/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64
 
 RUN mkdir -p /opt/tools \
     && curl -fsSL "${PPT_MASTER_ARCHIVE_URL}" -o /tmp/ppt-master.tar.gz \
@@ -73,5 +60,7 @@ RUN /opt/tools/ppt-master/.venv/bin/python --version \
     && /opt/tools/ppt-master/.venv/bin/python -c "import pptx, fitz, PIL, requests, bs4; print('ppt-master deps ok')" \
     && /opt/tools/docling/.venv/bin/python --version \
     && /opt/tools/docling/.venv/bin/docling --version \
-    && unipdf version \
+    && pdfcpu version \
+    && qpdf --version \
+    && pdfinfo -v \
     && if command -v magick >/dev/null 2>&1; then magick -version; else convert -version; fi
