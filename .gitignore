@@ -1,0 +1,12 @@
+# Local editor / OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local build / test scratch
+.tmp/
