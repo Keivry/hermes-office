@@ -54,9 +54,9 @@ RUN uv venv /opt/tools/ppt-master/.venv \
     && mkdir -p /opt/tools/docling \
     && uv venv /opt/tools/docling/.venv \
     && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
-        --index-url https://pypi.org/simple \
-        --extra-index-url https://download.pytorch.org/whl/cpu \
-        --index-strategy unsafe-best-match \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch>=2.2.2,<3" "torchvision>=0,<1" \
+    && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
         "docling==${DOCLING_VERSION}"
 
 ENV OFFICECLI_SKIP_UPDATE=1
