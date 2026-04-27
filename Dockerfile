@@ -1,10 +1,10 @@
 FROM nousresearch/hermes-agent:latest
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.54
+ARG OFFICECLI_VERSION=v1.0.56
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
-ARG PPT_MASTER_REF=43ee46b61cfc130af91c18be7d807bdb538f6a7e
+ARG PPT_MASTER_REF=d8fec4fd25010dbda54a82046119fc4af4e4dac6
 ARG PPT_MASTER_ARCHIVE_URL=https://codeload.github.com/hugohe3/ppt-master/tar.gz/${PPT_MASTER_REF}
 ARG DOCLING_VERSION=2.89.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.10.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=8d316e5bf121f1eab1147e49ad0511a9d92e4c45cc357d1ab0bee440da71a095
