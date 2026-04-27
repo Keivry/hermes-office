@@ -1,0 +1,7 @@
+.git
+.gitignore
+.DS_Store
+Thumbs.db
+.tmp/
+
+deploy/clawmem-models/models/

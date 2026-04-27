@@ -1,0 +1,73 @@
+version: "3.9"
+
+services:
+  clawmem-embed:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: clawmem-embed
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./models:/models
+    command:
+      - -m
+      - /models/embeddinggemma-300M-Q8_0.gguf
+      - --embeddings
+      - --port
+      - "8088"
+      - --host
+      - 0.0.0.0
+      - -ngl
+      - "99"
+      - -c
+      - "2048"
+      - --batch-size
+      - "2048"
+
+  clawmem-llm:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: clawmem-llm
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./models:/models
+    command:
+      - -m
+      - /models/qmd-query-expansion-1.7B-q4_k_m.gguf
+      - --port
+      - "8089"
+      - --host
+      - 0.0.0.0
+      - -ngl
+      - "99"
+      - -c
+      - "4096"
+      - --batch-size
+      - "512"
+
+  clawmem-rerank:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: clawmem-rerank
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./models:/models
+    command:
+      - -m
+      - /models/Qwen3-Reranker-0.6B-Q8_0.gguf
+      - --reranking
+      - --port
+      - "8090"
+      - --host
+      - 0.0.0.0
+      - -ngl
+      - "99"
+      - -c
+      - "2048"
+      - --batch-size
+      - "512"

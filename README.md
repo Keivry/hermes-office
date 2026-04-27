@@ -9,8 +9,10 @@ A `nousresearch/hermes-agent`-based Docker image bundled with:
 - [pdfcpu](https://github.com/pdfcpu/pdfcpu)
 - [qpdf](https://github.com/qpdf/qpdf)
 - [poppler-utils](https://poppler.freedesktop.org/)
+- [Bun](https://bun.sh/)
+- [ClawMem](https://github.com/yoloshii/ClawMem)
 
-This repository reuses the same GitHub Actions build/publish pattern as `Keivry/hermes-matrix`, but targets Office document automation, image processing, and document/PDF conversion.
+This repository reuses the same GitHub Actions build/publish pattern as `Keivry/hermes-matrix`, but targets Office document automation, image processing, document/PDF conversion, and ClawMem-backed long-term agent memory.
 
 ## What gets installed
 
@@ -53,6 +55,26 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 - Installed from the distro package as `poppler-utils`
 - Provides utilities such as `pdfinfo`, `pdftotext`, `pdfimages`, `pdftoppm`, `pdfseparate`, and `pdfunite`
 
+### Bun
+- Installed as a pinned standalone binary at `/usr/local/bin/bun`
+- Current pinned version in `Dockerfile`: `1.3.13`
+- Added because ClawMem requires Bun at runtime
+
+### ClawMem
+- Installed globally as `clawmem` at `/usr/local/bin/clawmem`
+- Current pinned version in `Dockerfile`: `0.10.1`
+- The Hermes memory provider plugin is staged under `/opt/tools/clawmem-plugin`
+- On container start, the entrypoint syncs that plugin into `$HERMES_HOME/plugins/clawmem`
+- The image defaults to **external-model / remote-GPU** style operation:
+  - `CLAWMEM_SERVE_MODE=external`
+  - `CLAWMEM_NO_LOCAL_MODELS=true`
+  - `CLAWMEM_PROFILE=balanced`
+- The image also auto-starts a local `clawmem serve` REST sidecar bound to `127.0.0.1:${CLAWMEM_SERVE_PORT:-7438}` unless one is already running
+- ClawMem state defaults to persistent paths under `/opt/data`:
+  - `INDEX_PATH=/opt/data/state/clawmem/index.sqlite`
+  - `CLAWMEM_FOCUS_ROOT=/opt/data/state/clawmem/sessions`
+  - transcripts under `/opt/data/clawmem-transcripts`
+
 ## Included extra system packages
 
 The image adds these packages beyond the official Hermes base image:
@@ -64,6 +86,7 @@ The image adds these packages beyond the official Hermes base image:
 - `pkg-config`
 - `poppler-utils`
 - `qpdf`
+- `unzip`
 - `xz-utils`
 
 Docling-specific Python artifacts are pinned in the Dockerfile rather than installed from floating latest releases, to stay compatible with the upstream Hermes `uv` freshness window.
@@ -77,6 +100,78 @@ Environment variables baked into the image:
 - `PPT_MASTER_VENV=/opt/tools/ppt-master/.venv`
 - `DOCLING_HOME=/opt/tools/docling`
 - `DOCLING_VENV=/opt/tools/docling/.venv`
+- `CLAWMEM_BIN=/usr/local/bin/clawmem`
+- `CLAWMEM_SERVE_PORT=7438`
+- `CLAWMEM_SERVE_MODE=external`
+- `CLAWMEM_PROFILE=balanced`
+- `CLAWMEM_NO_LOCAL_MODELS=true`
+- `INDEX_PATH=/opt/data/state/clawmem/index.sqlite`
+- `CLAWMEM_FOCUS_ROOT=/opt/data/state/clawmem/sessions`
+- `HERMES_CLAWMEM_PLUGIN_SOURCE=/opt/tools/clawmem-plugin`
+- `HERMES_CLAWMEM_SYNC_PLUGIN=true`
+- `HERMES_CLAWMEM_AUTOSTART_SERVE=true`
+
+## ClawMem integration model
+
+This image is designed for the deployment shape you asked for:
+
+1. `hermes-office` bundles the ClawMem runtime, wrapper, and Hermes plugin
+2. Hermes talks to the plugin from `$HERMES_HOME/plugins/clawmem`
+3. `clawmem serve` runs inside the Hermes container as a lightweight local REST sidecar
+4. embedding / LLM / reranker inference is expected to run on your separate llama.cpp GPU server
+5. the Hermes container is told where that GPU host lives via environment variables
+
+### Required runtime env for remote model services
+
+At deploy time, set at least:
+
+```env
+CLAWMEM_EMBED_URL=http://<gpu-host>:8088
+CLAWMEM_LLM_URL=http://<gpu-host>:8089
+CLAWMEM_RERANK_URL=http://<gpu-host>:8090
+CLAWMEM_NO_LOCAL_MODELS=true
+```
+
+Optional but recommended:
+
+```env
+CLAWMEM_PROFILE=balanced
+CLAWMEM_SERVE_PORT=7438
+INDEX_PATH=/opt/data/state/clawmem/index.sqlite
+CLAWMEM_FOCUS_ROOT=/opt/data/state/clawmem/sessions
+```
+
+### Activating the provider in Hermes
+
+The Hermes config needs an external memory provider entry like:
+
+```yaml
+memory:
+  provider: clawmem
+```
+
+After the container starts, verify inside the container:
+
+```bash
+hermes memory status
+curl -H "Authorization: Bearer $CLAWMEM_API_TOKEN" http://127.0.0.1:7438/health  # omit header if no token is set
+clawmem doctor
+```
+
+## GPU model stack for ClawMem
+
+This repo includes:
+
+- `deploy/clawmem-models/compose.yaml`
+- `deploy/clawmem-models/README.md`
+
+These deploy the **QMD native** ClawMem-recommended stack on a separate GPU server using the official `ghcr.io/ggml-org/llama.cpp:server-cuda` image:
+
+- `embeddinggemma-300M-Q8_0.gguf` on `8088`
+- `qmd-query-expansion-1.7B-q4_k_m.gguf` on `8089`
+- `Qwen3-Reranker-0.6B-Q8_0.gguf` on `8090`
+
+If your existing Qwen3.5 service already owns `8089`, either move that service or change the host-side mapping in the compose file and update `CLAWMEM_LLM_URL` on the Hermes side.
 
 ## Tool-specific notes
 
@@ -136,6 +231,16 @@ docling https://arxiv.org/pdf/2206.01062 -o paper.md
 docling report.pdf --format json -o report.json
 ```
 
+### ClawMem
+Typical usage:
+
+```bash
+clawmem --version
+clawmem doctor
+clawmem status
+clawmem collection list
+```
+
 ## Typical usage inside the container
 
 ### OfficeCLI
@@ -161,6 +266,12 @@ docling sample.pdf -o sample.md
 pdfcpu merge merged.pdf a.pdf b.pdf
 ```
 
+### ClawMem
+```bash
+clawmem doctor
+curl -H "Authorization: Bearer $CLAWMEM_API_TOKEN" http://127.0.0.1:7438/health  # omit header if no token is set
+```
+
 ## Build and publish
 
 The workflow publishes to GHCR as:
@@ -170,7 +281,7 @@ The workflow publishes to GHCR as:
 
 Triggers:
 
-- push to `main` or `master` affecting `Dockerfile`, workflow, or `README.md`
+- push to `main` or `master` affecting `Dockerfile`, workflow, `README.md`, `docker/**`, or `deploy/**`
 - daily scheduled check
 - manual `workflow_dispatch`
 
@@ -180,4 +291,5 @@ Triggers:
 - Manual dispatch can be used to rebuild after updating pinned upstream versions.
 - `PaddleOCR` is intentionally **not** bundled here; you said it will be deployed separately on another server later.
 - `unipdf-cli` was intentionally removed because it requires runtime licensing; the image now prefers the open-source stack of `pdfcpu + qpdf + poppler-utils`.
-- If needed later, upstream-change detection for OfficeCLI releases, PPT Master commits, pdfcpu releases, and Docling versions can be added.
+- ClawMem's Hermes plugin currently talks to `clawmem serve` on `127.0.0.1:${CLAWMEM_SERVE_PORT}`; that is why this image runs the REST sidecar locally even when model inference is remote.
+- If needed later, upstream-change detection for OfficeCLI releases, PPT Master commits, pdfcpu releases, Docling versions, Bun, and ClawMem versions can be added.
