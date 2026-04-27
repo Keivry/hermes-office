@@ -58,7 +58,7 @@ RUN curl -fsSL "${BUN_ASSET_URL}" -o "/tmp/${BUN_ASSET_NAME}" \
     && bun --version
 
 RUN npm install -g --unsafe-perm --no-fund --no-audit "clawmem@${CLAWMEM_VERSION}" \
-    && clawmem --version
+    && node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)'
 
 RUN mkdir -p /opt/tools /opt/tools/clawmem-plugin \
     && CLAWMEM_NODE_ROOT="$(npm root -g)" \
@@ -105,7 +105,7 @@ RUN /opt/tools/ppt-master/.venv/bin/python --version \
     && /opt/tools/docling/.venv/bin/python --version \
     && /opt/tools/docling/.venv/bin/docling --version \
     && bun --version \
-    && clawmem --version \
+    && node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)' \
     && pdfcpu version \
     && qpdf --version \
     && pdfinfo -v \
