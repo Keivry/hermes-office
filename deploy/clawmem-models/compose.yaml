@@ -59,7 +59,7 @@ services:
       - ./models:/models
     command:
       - -m
-      - /models/Qwen3-Reranker-0.6B-Q8_0.gguf
+      - /models/qwen3-reranker-0.6b-q8_0.gguf
       - --reranking
       - --port
       - "8090"
