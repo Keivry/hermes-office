@@ -186,7 +186,7 @@ These deploy the **QMD native** ClawMem-recommended stack on a separate GPU serv
 
 - `embeddinggemma-300M-Q8_0.gguf` on `8088`
 - `qmd-query-expansion-1.7B-q4_k_m.gguf` on `8089`
-- `Qwen3-Reranker-0.6B-Q8_0.gguf` on `8090`
+- `qwen3-reranker-0.6b-q8_0.gguf` on `8090`
 
 If your existing Qwen3.5 service already owns `8089`, either move that service or change the host-side mapping in the compose file and update `CLAWMEM_LLM_URL` on the Hermes side.
 

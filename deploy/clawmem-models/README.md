@@ -4,7 +4,7 @@ This directory contains a `compose.yaml` for the **QMD native** ClawMem model st
 
 - embedding: `embeddinggemma-300M-Q8_0.gguf` on port `8088`
 - llm: `qmd-query-expansion-1.7B-q4_k_m.gguf` on port `8089`
-- reranker: `Qwen3-Reranker-0.6B-Q8_0.gguf` on port `8090`
+- reranker: `qwen3-reranker-0.6b-q8_0.gguf` on port `8090`
 
 ## Download the model files
 
@@ -15,7 +15,7 @@ mkdir -p models
 cd models
 wget https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/main/embeddinggemma-300M-Q8_0.gguf
 wget https://huggingface.co/tobil/qmd-query-expansion-1.7B-gguf/resolve/main/qmd-query-expansion-1.7B-q4_k_m.gguf
-wget https://huggingface.co/ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/resolve/main/Qwen3-Reranker-0.6B-Q8_0.gguf
+wget https://huggingface.co/ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/resolve/main/qwen3-reranker-0.6b-q8_0.gguf
 ```
 
 ## Start
