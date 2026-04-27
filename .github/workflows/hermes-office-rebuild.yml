@@ -5,10 +5,12 @@ on:
     branches: [main, master]
     paths:
       - "Dockerfile"
+      - ".dockerignore"
       - ".github/workflows/hermes-office-rebuild.yml"
       - "README.md"
       - "docker/**"
       - "deploy/**"
+      - "skills/**"
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:

@@ -69,6 +69,7 @@ RUN mkdir -p /opt/tools /opt/tools/clawmem-plugin \
     && rm -f /tmp/ppt-master.tar.gz \
     && chown -R hermes:hermes /opt/tools
 
+COPY skills/ /opt/hermes/skills/
 COPY docker/hermes-office-entrypoint.sh /usr/local/bin/hermes-office-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/hermes-office-entrypoint.sh
 
