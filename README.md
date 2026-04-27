@@ -11,6 +11,7 @@ A `nousresearch/hermes-agent`-based Docker image bundled with:
 - [poppler-utils](https://poppler.freedesktop.org/)
 - [Bun](https://bun.sh/)
 - [ClawMem](https://github.com/yoloshii/ClawMem)
+- image-bundled Hermes companion skills for the office/document toolchain
 
 This repository reuses the same GitHub Actions build/publish pattern as `Keivry/hermes-matrix`, but targets Office document automation, image processing, document/PDF conversion, and ClawMem-backed long-term agent memory.
 
@@ -19,14 +20,14 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.54`
+- Current pinned version in `Dockerfile`: `v1.0.56`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
 - `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
-- Current pinned source ref in `Dockerfile`: `43ee46b61cfc130af91c18be7d807bdb538f6a7e`
+- Current pinned source ref in `Dockerfile`: `d8fec4fd25010dbda54a82046119fc4af4e4dac6`
 
 ### ImageMagick
 - Installed from the distro package as `imagemagick`
@@ -74,6 +75,20 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
   - `INDEX_PATH=/opt/data/state/clawmem/index.sqlite`
   - `CLAWMEM_FOCUS_ROOT=/opt/data/state/clawmem/sessions`
   - transcripts under `/opt/data/clawmem-transcripts`
+
+### Bundled Hermes skills for this image
+The image now vendors companion skills under `skills/productivity/` and copies them into `/opt/hermes/skills/` at build time so fresh deployments inherit the routing knowledge along with the tools.
+
+Bundled image-specific skills:
+- `document-tool-router`
+- `officecli`
+- `docling-local`
+- `imagemagick-cli`
+- `pdfcpu-local`
+- `pdf-structure-tools`
+- `ppt-master-local`
+
+This keeps natural-language routing aligned with the actual toolchain in the image, instead of depending on ad-hoc local skills in `/opt/data/skills`.
 
 ## Included extra system packages
 
@@ -154,7 +169,9 @@ After the container starts, verify inside the container:
 
 ```bash
 hermes memory status
-curl -H "Authorization: Bearer $CLAWMEM_API_TOKEN" http://127.0.0.1:7438/health  # omit header if no token is set
+curl http://127.0.0.1:7438/health
+# If CLAWMEM_API_TOKEN is set:
+# curl -H "Authorization: Bearer <clawmem-api-token>" http://127.0.0.1:7438/health
 clawmem doctor
 ```
 
@@ -235,11 +252,21 @@ docling report.pdf --format json -o report.json
 Typical usage:
 
 ```bash
-clawmem --version
+node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)'
 clawmem doctor
 clawmem status
 clawmem collection list
 ```
+
+## Presentation and OCR boundaries
+
+The base Hermes image already ships generic `powerpoint` and `ocr-and-documents` skills, but this image does **not** currently promise the full runtime dependency set implied by every path in those skills.
+
+Current recommendation:
+- use `officecli` for precise edits to existing `.docx/.xlsx/.pptx`
+- use `ppt-master-local` for generating a full new editable deck from source material
+- use bundled `powerpoint` skill primarily as an analysis/editing reference for existing `.pptx`, not as proof that `markitdown`, `pptxgenjs`, and `soffice` are all bundled here
+- use `ocr-and-documents` for routing OCR-heavy requests, but remember this image intentionally does **not** bundle PaddleOCR or marker-pdf-scale heavy OCR stacks
 
 ## Typical usage inside the container
 
@@ -269,7 +296,9 @@ pdfcpu merge merged.pdf a.pdf b.pdf
 ### ClawMem
 ```bash
 clawmem doctor
-curl -H "Authorization: Bearer $CLAWMEM_API_TOKEN" http://127.0.0.1:7438/health  # omit header if no token is set
+curl http://127.0.0.1:7438/health
+# If CLAWMEM_API_TOKEN is set:
+# curl -H "Authorization: Bearer <clawmem-api-token>" http://127.0.0.1:7438/health
 ```
 
 ## Build and publish
@@ -281,7 +310,7 @@ The workflow publishes to GHCR as:
 
 Triggers:
 
-- push to `main` or `master` affecting `Dockerfile`, workflow, `README.md`, `docker/**`, or `deploy/**`
+- push to `main` or `master` affecting `Dockerfile`, `.dockerignore`, workflow, `README.md`, `docker/**`, `deploy/**`, or `skills/**`
 - daily scheduled check
 - manual `workflow_dispatch`
 
