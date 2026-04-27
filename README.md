@@ -141,11 +141,16 @@ This image is designed for the deployment shape you asked for:
 At deploy time, set at least:
 
 ```env
-CLAWMEM_EMBED_URL=http://<gpu-host>:8088
-CLAWMEM_LLM_URL=http://<gpu-host>:8089
-CLAWMEM_RERANK_URL=http://<gpu-host>:8090
+CLAWMEM_EMBED_URL=http://<gpu-host>:9088
+CLAWMEM_LLM_URL=http://<gpu-host>:9089
+CLAWMEM_RERANK_URL=http://<gpu-host>:9090
 CLAWMEM_NO_LOCAL_MODELS=true
+CLAWMEM_SERVE_MODE=external
 ```
+
+Verified working port mapping from production: embedding `9088`, LLM `9089`, reranker `9090`.
+
+If the GPU server is remote, do **not** point these variables at `127.0.0.1` or `localhost` from inside the Hermes container; use the GPU host's reachable private IP or DNS name.
 
 Optional but recommended:
 
@@ -184,11 +189,15 @@ This repo includes:
 
 These deploy the **QMD native** ClawMem-recommended stack on a separate GPU server using the official `ghcr.io/ggml-org/llama.cpp:server-cuda` image:
 
-- `embeddinggemma-300M-Q8_0.gguf` on `8088`
-- `qmd-query-expansion-1.7B-q4_k_m.gguf` on `8089`
-- `qwen3-reranker-0.6b-q8_0.gguf` on `8090`
+- `embeddinggemma-300M-Q8_0.gguf` on `9088`
+- `qmd-query-expansion-1.7B-q4_k_m.gguf` on `9089`
+- `qwen3-reranker-0.6b-q8_0.gguf` on `9090`
 
-If your existing Qwen3.5 service already owns `8089`, either move that service or change the host-side mapping in the compose file and update `CLAWMEM_LLM_URL` on the Hermes side.
+Important llama.cpp tuning note from the production rollout: for the embedding service, setting only `--batch-size 2048` was **not** enough. `clawmem embed` still failed with `increase the physical batch size (current batch size: 512)` until the embedding server also set `--ubatch-size 2048`. The example compose in `deploy/clawmem-models/compose.yaml` now includes both flags for `clawmem-embed`.
+
+For the LLM and reranker services, keep the example on the more conservative `--batch-size 512` unless you have measured headroom and a reason to raise it.
+
+If another service already owns `9089` (for example Qwen3.5), either move that service or change the host-side mapping in the compose file and update `CLAWMEM_LLM_URL` on the Hermes side.
 
 ## Tool-specific notes
 

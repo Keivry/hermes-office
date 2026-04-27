@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     gpus: all
     ports:
-      - "8088:8088"
+      - "9088:9088"
     volumes:
       - ./models:/models
     command:
@@ -15,7 +15,7 @@ services:
       - /models/embeddinggemma-300M-Q8_0.gguf
       - --embeddings
       - --port
-      - "8088"
+      - "9088"
       - --host
       - 0.0.0.0
       - -ngl
@@ -24,6 +24,8 @@ services:
       - "2048"
       - --batch-size
       - "2048"
+      - --ubatch-size
+      - "2048"
 
   clawmem-llm:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
@@ -31,14 +33,14 @@ services:
     restart: unless-stopped
     gpus: all
     ports:
-      - "8089:8089"
+      - "9089:9089"
     volumes:
       - ./models:/models
     command:
       - -m
       - /models/qmd-query-expansion-1.7B-q4_k_m.gguf
       - --port
-      - "8089"
+      - "9089"
       - --host
       - 0.0.0.0
       - -ngl
@@ -54,7 +56,7 @@ services:
     restart: unless-stopped
     gpus: all
     ports:
-      - "8090:8090"
+      - "9090:9090"
     volumes:
       - ./models:/models
     command:
@@ -62,7 +64,7 @@ services:
       - /models/qwen3-reranker-0.6b-q8_0.gguf
       - --reranking
       - --port
-      - "8090"
+      - "9090"
       - --host
       - 0.0.0.0
       - -ngl
