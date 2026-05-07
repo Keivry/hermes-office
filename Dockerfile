@@ -1,12 +1,12 @@
 FROM nousresearch/hermes-agent:latest
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.56
+ARG OFFICECLI_VERSION=v1.0.75
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
-ARG PPT_MASTER_REF=d8fec4fd25010dbda54a82046119fc4af4e4dac6
+ARG PPT_MASTER_REF=24e655c12cab9bded6306aebc5c361422018232f
 ARG PPT_MASTER_ARCHIVE_URL=https://codeload.github.com/hugohe3/ppt-master/tar.gz/${PPT_MASTER_REF}
-ARG DOCLING_VERSION=2.89.0
+ARG DOCLING_VERSION=2.92.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.10.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=8d316e5bf121f1eab1147e49ad0511a9d92e4c45cc357d1ab0bee440da71a095
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.25.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=90eec299e1f82cfaf080ccb789df3838cb9a54b57e2ebe33852cd392c692de5c
 ARG PDFCPU_VERSION=0.12.0
@@ -15,7 +15,7 @@ ARG BUN_VERSION=1.3.13
 ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
-ARG CLAWMEM_VERSION=0.10.1
+ARG CLAWMEM_VERSION=0.10.3
 
 LABEL org.opencontainers.image.title="hermes-office"
 LABEL org.opencontainers.image.description="Hermes Agent image bundled with OfficeCLI, PPT Master, ImageMagick, Docling, pdfcpu, qpdf, poppler-utils, Bun, and ClawMem"
