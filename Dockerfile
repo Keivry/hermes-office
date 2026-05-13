@@ -81,6 +81,11 @@ COPY skills/ /opt/hermes/skills/
 COPY docker/hermes-office-entrypoint.sh /usr/local/bin/hermes-office-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/hermes-office-entrypoint.sh
 
+# Hermes venv was created during base image build as root;
+# make it writable so rtk-hermes and future pip-installed plugins
+# can be added under USER hermes.
+RUN chown -R hermes:hermes /opt/hermes/.venv
+
 USER hermes
 
 RUN uv venv /opt/tools/ppt-master/.venv \
