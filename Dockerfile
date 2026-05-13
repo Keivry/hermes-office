@@ -26,12 +26,13 @@ LABEL org.opencontainers.image.description="Hermes Agent image bundled with Offi
 LABEL org.opencontainers.image.source="https://github.com/Keivry/hermes-office"
 LABEL org.opencontainers.image.vendor="Keivry"
 LABEL org.opencontainers.image.licenses="Apache-2.0, MIT"
-LABEL org.opencontainers.image.version="${HERMES_OFFICE_VERSION}"
-
-USER root
 
 ARG HERMES_OFFICE_VERSION
 ARG HERMES_AGENT_VERSION
+
+LABEL org.opencontainers.image.version="${HERMES_OFFICE_VERSION}"
+
+USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
