@@ -66,6 +66,24 @@ if [ -d "$INSTALL_DIR/skills" ]; then
     python3 "$INSTALL_DIR/tools/skills_sync.py"
 fi
 
+# Enable rtk-rewrite plugin if installed
+python3 << 'PY'
+import os, yaml
+config_path = os.environ.get('HERMES_HOME', '/opt/data') + '/config.yaml'
+if os.path.exists(config_path):
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    plugins = cfg.setdefault('plugins', {})
+    enabled = plugins.setdefault('enabled', [])
+    modified = False
+    if 'rtk-rewrite' not in enabled:
+        enabled.append('rtk-rewrite')
+        modified = True
+    if modified:
+        with open(config_path, 'w') as f:
+            yaml.dump(cfg, f)
+PY
+
 if [ "${HERMES_CLAWMEM_SYNC_PLUGIN:-true}" = "true" ] && [ -d "${HERMES_CLAWMEM_PLUGIN_SOURCE:-}" ]; then
     rm -rf "$HERMES_HOME/plugins/clawmem"
     mkdir -p "$HERMES_HOME/plugins/clawmem"

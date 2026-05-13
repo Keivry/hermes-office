@@ -1,24 +1,26 @@
 FROM nousresearch/hermes-agent:latest
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.56
+ARG OFFICECLI_VERSION=v1.0.89
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
-ARG PPT_MASTER_REF=d8fec4fd25010dbda54a82046119fc4af4e4dac6
-ARG PPT_MASTER_ARCHIVE_URL=https://codeload.github.com/hugohe3/ppt-master/tar.gz/${PPT_MASTER_REF}
-ARG DOCLING_VERSION=2.89.0
-ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.10.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=8d316e5bf121f1eab1147e49ad0511a9d92e4c45cc357d1ab0bee440da71a095
-ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.25.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=90eec299e1f82cfaf080ccb789df3838cb9a54b57e2ebe33852cd392c692de5c
-ARG PDFCPU_VERSION=0.12.0
+ARG PPT_MASTER_VERSION=v2.6.0
+ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
+ARG DOCLING_VERSION=2.93.0
+ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.12.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=ada78018bdfa30d1c766596cd32d910dbf5b03424cd859231b6d2a00533de922
+ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.27.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=ba77816bbde883c0c2075a1e284cf2e6f324472d4523442f5e3ae0812a98ae1e
+ARG PDFCPU_VERSION=0.12.1
 ARG PDFCPU_ASSET_URL=https://github.com/pdfcpu/pdfcpu/releases/download/v${PDFCPU_VERSION}/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64.tar.xz
 ARG BUN_VERSION=1.3.13
 ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
-ARG CLAWMEM_VERSION=0.10.1
+ARG CLAWMEM_VERSION=0.10.4
+ARG RTK_VERSION=v0.39.0
+ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 
 LABEL org.opencontainers.image.title="hermes-office"
-LABEL org.opencontainers.image.description="Hermes Agent image bundled with OfficeCLI, PPT Master, ImageMagick, Docling, pdfcpu, qpdf, poppler-utils, Bun, and ClawMem"
+LABEL org.opencontainers.image.description="Hermes Agent image bundled with OfficeCLI, PPT Master, ImageMagick, Docling, pdfcpu, qpdf, poppler-utils, Bun, ClawMem, and RTK"
 LABEL org.opencontainers.image.source="https://github.com/Keivry/hermes-office"
 LABEL org.opencontainers.image.vendor="Keivry"
 LABEL org.opencontainers.image.licenses="Apache-2.0, MIT"
@@ -57,6 +59,12 @@ RUN curl -fsSL "${BUN_ASSET_URL}" -o "/tmp/${BUN_ASSET_NAME}" \
     && rm -rf "/tmp/${BUN_ASSET_NAME}" /tmp/SHASUMS256.txt /tmp/bun.sha256 /tmp/bun-linux-x64-baseline \
     && bun --version
 
+RUN curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/${RTK_ASSET}" -o /tmp/rtk.tar.gz \
+    && tar -xzf /tmp/rtk.tar.gz -C /tmp \
+    && install -m 0755 /tmp/rtk /usr/local/bin/rtk \
+    && rm -rf /tmp/rtk.tar.gz /tmp/rtk \
+    && rtk --version
+
 RUN npm install -g --unsafe-perm --no-fund --no-audit "clawmem@${CLAWMEM_VERSION}" \
     && node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)'
 
@@ -64,7 +72,7 @@ RUN mkdir -p /opt/tools /opt/tools/clawmem-plugin \
     && CLAWMEM_NODE_ROOT="$(npm root -g)" \
     && curl -fsSL "${PPT_MASTER_ARCHIVE_URL}" -o /tmp/ppt-master.tar.gz \
     && tar -xzf /tmp/ppt-master.tar.gz -C /opt/tools \
-    && mv "/opt/tools/ppt-master-${PPT_MASTER_REF}" /opt/tools/ppt-master \
+    && mv "/opt/tools/ppt-master-${PPT_MASTER_VERSION#v}" /opt/tools/ppt-master \
     && cp -R "${CLAWMEM_NODE_ROOT}/clawmem/src/hermes/." /opt/tools/clawmem-plugin/ \
     && rm -f /tmp/ppt-master.tar.gz \
     && chown -R hermes:hermes /opt/tools
@@ -82,7 +90,9 @@ RUN uv venv /opt/tools/ppt-master/.venv \
     && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
         "${TORCH_CPU_WHL}" "${TORCHVISION_CPU_WHL}" \
     && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
-        "docling==${DOCLING_VERSION}"
+        "docling==${DOCLING_VERSION}" \
+    && uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
+        "rtk-hermes==1.2.3"
 
 ENV OFFICECLI_SKIP_UPDATE=1
 ENV PPT_MASTER_HOME=/opt/tools/ppt-master
@@ -107,6 +117,8 @@ RUN /opt/tools/ppt-master/.venv/bin/python --version \
     && /opt/tools/docling/.venv/bin/docling --version \
     && bun --version \
     && node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)' \
+    && rtk --version \
+    && rtk rewrite "echo hello" > /dev/null 2>&1 \
     && pdfcpu version \
     && qpdf --version \
     && pdfinfo -v \

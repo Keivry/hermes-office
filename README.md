@@ -11,23 +11,24 @@ A `nousresearch/hermes-agent`-based Docker image bundled with:
 - [poppler-utils](https://poppler.freedesktop.org/)
 - [Bun](https://bun.sh/)
 - [ClawMem](https://github.com/yoloshii/ClawMem)
+- [RTK](https://github.com/rtk-ai/rtk) (Rust Token Killer) — CLI proxy that reduces LLM token consumption by 60–90% on terminal commands, with Hermes plugin auto-enabled
 - image-bundled Hermes companion skills for the office/document toolchain
 
-This repository reuses the same GitHub Actions build/publish pattern as `Keivry/hermes-matrix`, but targets Office document automation, image processing, document/PDF conversion, and ClawMem-backed long-term agent memory.
+This repository reuses the same GitHub Actions build/publish pattern as `Keivry/hermes-matrix`, but targets Office document automation, image processing, document/PDF conversion, ClawMem-backed long-term agent memory, and RTK-optimized LLM token usage on terminal commands.
 
 ## What gets installed
 
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.56`
+- Current pinned version in `Dockerfile`: `v1.0.89`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
 - `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
-- Current pinned source ref in `Dockerfile`: `d8fec4fd25010dbda54a82046119fc4af4e4dac6`
+- Current pinned version in `Dockerfile`: `v2.6.0`
 
 ### ImageMagick
 - Installed from the distro package as `imagemagick`
@@ -36,16 +37,16 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.89.0`
+- Current pinned version in `Dockerfile`: `2.93.0`
 - Installed in two steps for stability while **preserving** the upstream Hermes `uv` freshness policy:
-  1. install exact pinned CPU wheels for `torch==2.10.0+cpu` and `torchvision==0.25.0+cpu`
-  2. install `docling==2.89.0` from the normal Python package index
+  1. install exact pinned CPU wheels for `torch==2.12.0+cpu` and `torchvision==0.27.0+cpu`
+  2. install `docling==2.93.0` from the normal Python package index
 - This keeps the `exclude-newer = "7 days"` supply-chain protection in effect, avoids mixed-index resolution edge cases, and avoids pulling newer Docling releases that are outside the current freshness window
 - Current image installs the base `docling` package (not the optional VLM extras)
 
 ### pdfcpu
 - Installed as a standalone binary at `/usr/local/bin/pdfcpu`
-- Current pinned version in `Dockerfile`: `0.12.0`
+- Current pinned version in `Dockerfile`: `0.12.1`
 - Best suited for open-source PDF CLI operations such as merge, split, validate, optimize, watermark, rotate, forms, and image extraction
 
 ### qpdf
@@ -63,7 +64,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 
 ### ClawMem
 - Installed globally as `clawmem` at `/usr/local/bin/clawmem`
-- Current pinned version in `Dockerfile`: `0.10.1`
+- Current pinned version in `Dockerfile`: `0.10.4`
 - The Hermes memory provider plugin is staged under `/opt/tools/clawmem-plugin`
 - On container start, the entrypoint syncs that plugin into `$HERMES_HOME/plugins/clawmem`
 - The image defaults to **external-model / remote-GPU** style operation:
@@ -198,6 +199,54 @@ Important llama.cpp tuning note from the production rollout: for the embedding s
 For the LLM and reranker services, keep the example on the more conservative `--batch-size 512` unless you have measured headroom and a reason to raise it.
 
 If another service already owns `9089` (for example Qwen3.5), either move that service or change the host-side mapping in the compose file and update `CLAWMEM_LLM_URL` on the Hermes side.
+
+## RTK (Rust Token Killer)
+
+[RTK](https://github.com/rtk-ai/rtk) is a CLI proxy built as a single Rust binary (zero runtime dependencies). It intercepts terminal commands and applies four compression strategies — smart filtering, grouping, truncation, and deduplication — to reduce LLM token consumption by 60–90% on common dev commands like `git status`, `git diff`, `ls`, `grep`, `find`, `cat/read`, test runners, and build commands.
+
+### What's in this image
+
+- **RTK binary** at `/usr/local/bin/rtk` — pinned to `v0.39.0` (musl static build)
+- **rtk-hermes plugin** (`ogallotti/rtk-hermes` v1.2.3) — installed into Hermes' Python venv and auto-enabled in `config.yaml` via the entrypoint
+
+The Hermes plugin automatically rewrites terminal commands through `rtk` *before* execution, so the agent gets token-compressed output without any manual `rtk` prefix needed.
+
+### How it works
+
+```
+Agent calls terminal(command="cargo test --nocapture")
+  → rtk-hermes pre_tool_call hook intercepts
+  → plugin runs: rtk rewrite "cargo test --nocapture"
+  → RTK returns: rtk cargo test --nocapture  (-90% tokens)
+  → Hermes executes the rewritten command
+  → RTK-filtered output reaches the model
+```
+
+### Runtime configuration (environment variables)
+
+| Variable | Default | Description |
+|---|---|---|
+| `RTK_HERMES_MODE` | `rewrite` | `rewrite` (auto-apply), `suggest` (log-only), or `off` (disable) |
+| `RTK_HERMES_TIMEOUT_MS` | `2000` | Max ms waiting for `rtk rewrite` per command |
+| `RTK_HERMES_PREVIEW_MARKER` | `true` | Prefix rewritten commands with `: RTK &&` in Hermes tool preview |
+| `RTK_HERMES_BACKENDS` | `local` | Comma-separated; `local`, `local,ssh`, or `all` |
+
+> **Note:** `RTK_HERMES_BACKENDS` defaults to `local` — SSH and Docker backends are excluded by default since they may not have `rtk` installed on the remote host. Set `RTK_HERMES_BACKENDS=all` if all backends have RTK available.
+
+### Verification inside the container
+
+```bash
+rtk --version
+rtk rewrite "git status"     # test rewrite mode works
+rtk gain                     # token savings dashboard
+```
+
+### Troubleshooting
+
+- If RTK is not rewriting commands, check: `env | grep RTK_HERMES_MODE` (should be `rewrite`)
+- If the plugin is not loaded, verify `~/.hermes/config.yaml` has `rtk-rewrite` under `plugins.enabled`
+- The plugin is designed to **fail open** — if RTK binary is missing, times out, or crashes, the original command runs unchanged
+- Check Hermes logs for lines mentioning `rtk_hermes` or `rtk-rewrite`
 
 ## Tool-specific notes
 
