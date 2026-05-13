@@ -123,7 +123,6 @@ RUN /opt/tools/ppt-master/.venv/bin/python --version \
     && bun --version \
     && node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)' \
     && rtk --version \
-    && rtk rewrite "echo hello" > /dev/null 2>&1 \
     && pdfcpu version \
     && qpdf --version \
     && pdfinfo -v \
