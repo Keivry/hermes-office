@@ -11,8 +11,6 @@ on:
       - "docker/**"
       - "deploy/**"
       - "skills/**"
-  schedule:
-    - cron: "0 3 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -30,6 +28,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Extract version from Dockerfile
+        run: |
+          VERSION=$(grep -oP '^ARG HERMES_AGENT_VERSION=\K.*' Dockerfile)
+          echo "BASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "📦 Hermes-agent version: $VERSION"
+
       - name: Set lowercase owner
         run: echo "OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
 
@@ -43,45 +47,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check base image update status
-        id: check
-        if: github.event_name == 'schedule'
-        uses: lucacome/docker-image-update-checker@v3
-        with:
-          base-image: nousresearch/hermes-agent:latest
-          image: ghcr.io/${{ env.OWNER }}/hermes-office:latest
-
-      - name: Show check result
-        if: github.event_name == 'schedule'
-        run: |
-          echo "🔍 Base image needs update: ${{ steps.check.outputs.needs-update }}"
-          echo "Reason: ${{ steps.check.outputs.reason || 'N/A' }}"
-
-      - name: Get hermes-agent version
-        if: github.event_name != 'schedule' || steps.check.outputs.needs-update == 'true'
-        run: |
-          INSPECT=$(skopeo inspect docker://nousresearch/hermes-agent:latest 2>/dev/null)
-
-          VERSION=$(echo "$INSPECT" | jq -r '.Labels["org.opencontainers.image.version"] // ""')
-          if [ -z "$VERSION" ]; then
-            VERSION=$(echo "$INSPECT" | jq -r '.Labels["version"] // ""')
-          fi
-          if [ -z "$VERSION" ]; then
-            VERSION=$(curl -s "https://hub.docker.com/v2/repositories/nousresearch/hermes-agent/tags?page_size=100" | \
-              jq -r '[.results[] | select(.name | test("^v[0-9]")) | .name] |
-                     sort_by(split(".") | map(ltrimstr("v") | tonumber? // 0)) |
-                     last // ""')
-          fi
-          if [ -z "$VERSION" ]; then
-            VERSION="$(date +%Y%m%d)"
-          fi
-
-          echo "BASE_VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "📦 Hermes-agent version: $VERSION"
-
       - name: Build & Push
         id: build
-        if: github.event_name != 'schedule' || steps.check.outputs.needs-update == 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -97,9 +64,7 @@ jobs:
       - name: Final summary
         if: always()
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ steps.check.outputs.needs-update }}" != "true" ]; then
-            echo "ℹ️ No update needed this time."
-          elif [ "${{ steps.build.outcome }}" = "success" ]; then
+          if [ "${{ steps.build.outcome }}" = "success" ]; then
             echo "🎉 Tags pushed:"
             echo "  ghcr.io/${{ env.OWNER }}/hermes-office:latest"
             echo "  ghcr.io/${{ env.OWNER }}/hermes-office:${{ env.BASE_VERSION }}"
