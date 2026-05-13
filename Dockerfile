@@ -8,7 +8,7 @@ ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
 ARG PPT_MASTER_VERSION=v2.6.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.93.0
+ARG DOCLING_VERSION=2.92.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.12.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=ada78018bdfa30d1c766596cd32d910dbf5b03424cd859231b6d2a00533de922
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.27.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=ba77816bbde883c0c2075a1e284cf2e6f324472d4523442f5e3ae0812a98ae1e
 ARG PDFCPU_VERSION=0.12.1
@@ -100,7 +100,7 @@ RUN uv venv /opt/tools/ppt-master/.venv \
     && uv venv /opt/tools/docling/.venv \
     && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
         "${TORCH_CPU_WHL}" "${TORCHVISION_CPU_WHL}" \
-    && UV_EXCLUDE_DAY=0 uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
+    && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
         "docling==${DOCLING_VERSION}" \
     && uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
         "rtk-hermes==1.2.3"
