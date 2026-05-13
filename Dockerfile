@@ -1,4 +1,6 @@
-FROM nousresearch/hermes-agent:latest
+ARG HERMES_AGENT_VERSION=v2026.5.7
+ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
+FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG OFFICECLI_VERSION=v1.0.89
@@ -24,8 +26,12 @@ LABEL org.opencontainers.image.description="Hermes Agent image bundled with Offi
 LABEL org.opencontainers.image.source="https://github.com/Keivry/hermes-office"
 LABEL org.opencontainers.image.vendor="Keivry"
 LABEL org.opencontainers.image.licenses="Apache-2.0, MIT"
+LABEL org.opencontainers.image.version="${HERMES_OFFICE_VERSION}"
 
 USER root
+
+ARG HERMES_OFFICE_VERSION
+ARG HERMES_AGENT_VERSION
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
