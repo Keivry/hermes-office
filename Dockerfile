@@ -100,7 +100,7 @@ RUN uv venv /opt/tools/ppt-master/.venv \
     && uv venv /opt/tools/docling/.venv \
     && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
         "${TORCH_CPU_WHL}" "${TORCHVISION_CPU_WHL}" \
-    && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
+    && UV_EXCLUDE_DAY=0 uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
         "docling==${DOCLING_VERSION}" \
     && uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
         "rtk-hermes==1.2.3"
