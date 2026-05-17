@@ -21,14 +21,14 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.89`
+- Current pinned version in `Dockerfile`: `v1.0.93`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
 - `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
-- Current pinned version in `Dockerfile`: `v2.6.0`
+- Current pinned version in `Dockerfile`: `v2.7.0`
 
 ### ImageMagick
 - Installed from the distro package as `imagemagick`
@@ -38,10 +38,10 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
 - Current pinned version in `Dockerfile`: `2.93.0`
-- Installed in two steps for stability while **preserving** the upstream Hermes `uv` freshness policy:
+- Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.12.0+cpu` and `torchvision==0.27.0+cpu`
   2. install `docling==2.93.0` from the normal Python package index
-- This keeps the `exclude-newer = "7 days"` supply-chain protection in effect, avoids mixed-index resolution edge cases, and avoids pulling newer Docling releases that are outside the current freshness window
+- The upstream Hermes base image `[tool.uv] exclude-newer` policy was removed in v2026.5.16, so no freshness window constraint applies to docling or other PyPI installs
 - Current image installs the base `docling` package (not the optional VLM extras)
 
 ### pdfcpu
@@ -59,12 +59,12 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 
 ### Bun
 - Installed as a pinned standalone binary at `/usr/local/bin/bun`
-- Current pinned version in `Dockerfile`: `1.3.13`
+- Current pinned version in `Dockerfile`: `1.3.14`
 - Added because ClawMem requires Bun at runtime
 
 ### ClawMem
 - Installed globally as `clawmem` at `/usr/local/bin/clawmem`
-- Current pinned version in `Dockerfile`: `0.10.4`
+- Current pinned version in `Dockerfile`: `0.10.5`
 - The Hermes memory provider plugin is staged under `/opt/tools/clawmem-plugin`
 - On container start, the entrypoint syncs that plugin into `$HERMES_HOME/plugins/clawmem`
 - The image defaults to **external-model / remote-GPU** style operation:
@@ -105,7 +105,7 @@ The image adds these packages beyond the official Hermes base image:
 - `unzip`
 - `xz-utils`
 
-Docling-specific Python artifacts are pinned in the Dockerfile rather than installed from floating latest releases, to stay compatible with the upstream Hermes `uv` freshness window.
+Docling-specific Python artifacts are pinned in the Dockerfile rather than installed from floating latest releases, for reproducible builds.
 
 ## Runtime environment
 
@@ -206,7 +206,7 @@ If another service already owns `9089` (for example Qwen3.5), either move that s
 
 ### What's in this image
 
-- **RTK binary** at `/usr/local/bin/rtk` — pinned to `v0.39.0` (musl static build)
+- **RTK binary** at `/usr/local/bin/rtk` — pinned to `v0.40.0` (musl static binary)
 - **rtk-hermes plugin** (`ogallotti/rtk-hermes` v1.2.3) — installed into Hermes' Python venv and auto-enabled in `config.yaml` via the entrypoint
 
 The Hermes plugin automatically rewrites terminal commands through `rtk` *before* execution, so the agent gets token-compressed output without any manual `rtk` prefix needed.
