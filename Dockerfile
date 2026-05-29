@@ -3,7 +3,7 @@ ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.93
+ARG OFFICECLI_VERSION=v1.0.102
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
 ARG PPT_MASTER_VERSION=v2.8.0
@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     imagemagick \
     libcairo2-dev \
+    libicu-dev \
     pandoc \
     pkg-config \
     poppler-utils \
