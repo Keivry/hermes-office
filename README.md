@@ -21,14 +21,14 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.93`
+- Current pinned version in `Dockerfile`: `v1.0.102`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
 - `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
-- Current pinned version in `Dockerfile`: `v2.7.0`
+- Current pinned version in `Dockerfile`: `v2.8.0`
 
 ### ImageMagick
 - Installed from the distro package as `imagemagick`
@@ -37,11 +37,11 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.93.0`
+- Current pinned version in `Dockerfile`: `2.96.0`
 - Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.12.0+cpu` and `torchvision==0.27.0+cpu`
-  2. install `docling==2.93.0` from the normal Python package index
-- The upstream Hermes base image `[tool.uv] exclude-newer` policy was removed in v2026.5.16, so no freshness window constraint applies to docling or other PyPI installs
+  2. install `docling==2.96.0` from the normal Python package index
+- The upstream Hermes base image `[tool.uv] exclude-newer` policy was removed in v2026.5.28, so no freshness window constraint applies to docling or other PyPI installs
 - Current image installs the base `docling` package (not the optional VLM extras)
 
 ### pdfcpu
@@ -64,7 +64,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 
 ### ClawMem
 - Installed globally as `clawmem` at `/usr/local/bin/clawmem`
-- Current pinned version in `Dockerfile`: `0.10.5`
+- Current pinned version in `Dockerfile`: `0.10.7`
 - The Hermes memory provider plugin is staged under `/opt/tools/clawmem-plugin`
 - On container start, the entrypoint syncs that plugin into `$HERMES_HOME/plugins/clawmem`
 - The image defaults to **external-model / remote-GPU** style operation:
@@ -206,7 +206,7 @@ If another service already owns `9089` (for example Qwen3.5), either move that s
 
 ### What's in this image
 
-- **RTK binary** at `/usr/local/bin/rtk` — pinned to `v0.40.0` (musl static binary)
+- **RTK binary** at `/usr/local/bin/rtk` — pinned to `v0.42.0` (musl static binary)
 - **rtk-hermes plugin** (`ogallotti/rtk-hermes` v1.2.3) — installed into Hermes' Python venv and auto-enabled in `config.yaml` via the entrypoint
 
 The Hermes plugin automatically rewrites terminal commands through `rtk` *before* execution, so the agent gets token-compressed output without any manual `rtk` prefix needed.
