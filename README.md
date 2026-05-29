@@ -21,7 +21,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.100`
+- Current pinned version in `Dockerfile`: `v1.0.93`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
