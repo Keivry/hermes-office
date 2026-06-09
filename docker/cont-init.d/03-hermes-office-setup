@@ -1,0 +1,150 @@
+#!/command/with-contenv sh
+# s6-overlay cont-init.d hook — hermes-office setup
+# Runs after base stage2 (01-hermes-setup), 015-supervise-perms,
+# and 02-reconcile-profiles.
+#
+# Responsibilities:
+#   1. Enable rtk-rewrite Hermes plugin in config.yaml
+#   2. Sync ClawMem plugin from /opt/tools/clawmem-plugin to $HERMES_HOME/plugins/
+#   3. Validate ClawMem remote-model environment variables
+#   4. Autostart ClawMem REST sidecar on 127.0.0.1:$CLAWMEM_SERVE_PORT
+#
+# Runs as root (cont-init.d context). Privilege drops use s6-setuidgid
+# where files must be owned by or operations run as the hermes user.
+
+set -eu
+
+HERMES_HOME="${HERMES_HOME:-/opt/data}"
+INSTALL_DIR="/opt/hermes"
+
+# Drop to hermes via s6-setuidgid; no-op when already non-root.
+as_hermes() { [ "$(id -u)" = 0 ] || { "$@"; return; }; s6-setuidgid hermes "$@"; }
+
+# =========================================================================
+# 1. Enable rtk-rewrite plugin
+# =========================================================================
+# Inject 'rtk-rewrite' into $HERMES_HOME/config.yaml plugins.enabled list
+# if not already present. Run as hermes so the resulting file ownership
+# stays correct.
+#
+# The plugin is installed into the base image's .venv at build time
+# (rtk-hermes==1.2.3); this only ensures the config key is set so the
+# pre_tool_call hook fires.
+if [ -f "$HERMES_HOME/config.yaml" ]; then
+    as_hermes python3 -c "
+import os, yaml
+config_path = os.environ.get('HERMES_HOME', '/opt/data') + '/config.yaml'
+if os.path.exists(config_path):
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    plugins = cfg.setdefault('plugins', {})
+    enabled = plugins.setdefault('enabled', [])
+    modified = False
+    if 'rtk-rewrite' not in enabled:
+        enabled.append('rtk-rewrite')
+        modified = True
+    if modified:
+        with open(config_path, 'w') as f:
+            yaml.dump(cfg, f)
+" || echo "[office-setup] Warning: rtk-rewrite plugin enablement failed; continuing"
+fi
+
+# =========================================================================
+# 2. Sync ClawMem Hermes plugin
+# =========================================================================
+# The ClawMem plugin was staged at /opt/tools/clawmem-plugin/ during the
+# image build (copied from the global npm install).  On every boot, sync
+# it to $HERMES_HOME/plugins/clawmem so it's visible to the Hermes
+# plugin loader.  Skipped when disabled via HERMES_CLAWMEM_SYNC_PLUGIN.
+if [ "${HERMES_CLAWMEM_SYNC_PLUGIN:-true}" = "true" ] && [ -d "${HERMES_CLAWMEM_PLUGIN_SOURCE:-}" ]; then
+    # Remove the existing plugin dir (it may be stale from a previous
+    # image version) and re-copy from the baked source.
+    rm -rf "$HERMES_HOME/plugins/clawmem"
+    mkdir -p "$HERMES_HOME/plugins/clawmem"
+    cp -R "${HERMES_CLAWMEM_PLUGIN_SOURCE}/." "$HERMES_HOME/plugins/clawmem/"
+    # Ownership: cp -R from root-owned source dirs lands as root.
+    # Recursively chown to hermes so the runtime plugin loader can
+    # read & execute the entry.
+    chown -R hermes:hermes "$HERMES_HOME/plugins/clawmem" 2>/dev/null || \
+        echo "[office-setup] Warning: chown clawmem plugin dir failed (rootless container?)"
+fi
+
+# =========================================================================
+# 3. Validate ClawMem remote-model environment variables
+# =========================================================================
+# When CLAWMEM_SERVE_MODE=external and CLAWMEM_NO_LOCAL_MODELS=true
+# (the defaults baked into this image), the model endpoints (embed, LLM,
+# reranker) must be provided at runtime.  Fail early with a clear message
+# rather than letting Hermes start without a working memory backend.
+if [ "${CLAWMEM_SERVE_MODE:-external}" = "external" ] && [ "${CLAWMEM_NO_LOCAL_MODELS:-true}" = "true" ]; then
+    missing_remote_envs=""
+    for var_name in CLAWMEM_EMBED_URL CLAWMEM_LLM_URL CLAWMEM_RERANK_URL; do
+        eval "val=\${${var_name}:-}"
+        if [ -z "$val" ]; then
+            missing_remote_envs="${missing_remote_envs}  ${var_name}\n"
+        fi
+    done
+    if [ -n "$missing_remote_envs" ]; then
+        printf '[office-setup] Missing required ClawMem remote model env(s):\n%s' "$missing_remote_envs" >&2
+        printf '[office-setup] Set remote llama.cpp endpoints before starting Hermes when\n' >&2
+        printf 'CLAWMEM_SERVE_MODE=external and CLAWMEM_NO_LOCAL_MODELS=true.\n' >&2
+        printf 'Example:\n' >&2
+        printf '  CLAWMEM_EMBED_URL=http://<gpu-host>:9088\n' >&2
+        printf '  CLAWMEM_LLM_URL=http://<gpu-host>:9089\n' >&2
+        printf '  CLAWMEM_RERANK_URL=http://<gpu-host>:9090\n' >&2
+        exit 1
+    fi
+fi
+
+# =========================================================================
+# 4. Autostart ClawMem REST sidecar
+# =========================================================================
+# When HERMES_CLAWMEM_AUTOSTART_SERVE is true (the default), start a
+# local clawmem serve process bound to 127.0.0.1:$CLAWMEM_SERVE_PORT.
+# The sidecar acts as a REST proxy between Hermes' ClawMem plugin and the
+# remote GGUF model server (embed / LLM / reranker).
+#
+# Guard: skip if the sidecar is already running (checked via /health).
+# This makes container restart / s6 service re-spawn safe.
+if [ "${HERMES_CLAWMEM_AUTOSTART_SERVE:-true}" = "true" ] && [ -x "${CLAWMEM_BIN:-/usr/local/bin/clawmem}" ]; then
+    port="${CLAWMEM_SERVE_PORT:-7438}"
+
+    # Pre-flight: is the sidecar already responding?
+    if ! s6-setuidgid hermes python3 -c "
+import os, sys, urllib.request
+port = os.environ.get('CLAWMEM_SERVE_PORT', '7438')
+try:
+    req = urllib.request.Request(f'http://127.0.0.1:{port}/health')
+    urllib.request.urlopen(req, timeout=1)
+    sys.exit(0)
+except:
+    sys.exit(1)
+"; then
+        # Ensure the runtime log directory exists
+        mkdir -p "$HERMES_HOME/runtime/clawmem/debug"
+
+        # Start the sidecar as hermes (not root) so file ownership is
+        # correct for any state it writes under $HERMES_HOME.
+        # nohup + background: this is a long-lived daemon that must
+        # outlive the cont-init.d phase.
+        nohup s6-setuidgid hermes "$CLAWMEM_BIN" serve \
+            --host 127.0.0.1 --port "$port" \
+            >"$HERMES_HOME/runtime/clawmem/debug/serve.log" 2>&1 &
+
+        # Wait up to 15 s for the sidecar to become healthy
+        s6-setuidgid hermes python3 -c "
+import os, sys, time, urllib.request
+port = os.environ.get('CLAWMEM_SERVE_PORT', '7438')
+for _ in range(30):
+    try:
+        req = urllib.request.Request(f'http://127.0.0.1:{port}/health')
+        urllib.request.urlopen(req, timeout=1)
+        sys.exit(0)
+    except:
+        time.sleep(0.5)
+sys.exit(1)
+" || echo "[office-setup] Warning: ClawMem sidecar did not become healthy within 15 s; continuing"
+    fi
+fi
+
+echo "[office-setup] hermes-office setup complete"
