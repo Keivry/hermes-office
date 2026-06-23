@@ -85,6 +85,11 @@ RUN mkdir -p /opt/tools /opt/tools/clawmem-plugin \
     && rm -f /tmp/ppt-master.tar.gz \
     && chown -R hermes:hermes /opt/tools
 
+# Hermes venv was created during base image build as root;
+# make it writable so rtk-hermes and future pip-installed plugins
+# can be added under USER hermes.
+RUN chown -R hermes:hermes /opt/hermes/.venv
+
 COPY skills/ /opt/hermes/skills/
 # s6-overlay cont-init.d hook: runs after base stage2 setup (01-hermes-setup),
 # handles rtk-rewrite plugin enablement, ClawMem plugin sync, and ClawMem
