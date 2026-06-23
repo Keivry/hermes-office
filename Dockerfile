@@ -90,6 +90,10 @@ RUN mkdir -p /opt/tools /opt/tools/clawmem-plugin \
 # can be added under USER hermes.
 RUN chown -R hermes:hermes /opt/hermes/.venv
 
+# Install rtk-hermes into Hermes venv as root (venv may be root-owned in v0.17.0 base)
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
+    "rtk-hermes==1.2.3"
+
 COPY skills/ /opt/hermes/skills/
 # s6-overlay cont-init.d hook: runs after base stage2 setup (01-hermes-setup),
 # handles rtk-rewrite plugin enablement, ClawMem plugin sync, and ClawMem
@@ -105,9 +109,7 @@ RUN uv venv /opt/tools/ppt-master/.venv \
     && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
         "${TORCH_CPU_WHL}" "${TORCHVISION_CPU_WHL}" \
     && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
-        "docling==${DOCLING_VERSION}" \
-    && uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
-        "rtk-hermes==1.2.3"
+        "docling==${DOCLING_VERSION}"
 
 ENV OFFICECLI_SKIP_UPDATE=1
 ENV PPT_MASTER_HOME=/opt/tools/ppt-master
