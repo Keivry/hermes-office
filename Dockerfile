@@ -1,4 +1,4 @@
-ARG HERMES_AGENT_VERSION=v2026.6.19
+ARG HERMES_AGENT_VERSION=v2026.6.5
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
@@ -100,8 +100,9 @@ COPY skills/ /opt/hermes/skills/
 # sidecar autostart.
 COPY docker/cont-init.d/ /etc/cont-init.d/
 
-USER hermes
+USER root
 
+# Create venvs as root — chown back to hermes so runtime access works
 RUN uv venv /opt/tools/ppt-master/.venv \
     && uv pip install --python /opt/tools/ppt-master/.venv/bin/python --no-cache-dir -r /opt/tools/ppt-master/requirements.txt \
     && mkdir -p /opt/tools/docling \
@@ -110,6 +111,9 @@ RUN uv venv /opt/tools/ppt-master/.venv \
         "${TORCH_CPU_WHL}" "${TORCHVISION_CPU_WHL}" \
     && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
         "docling==${DOCLING_VERSION}"
+
+# Root-owned venv files under /opt/tools — chown to hermes for runtime access
+RUN chown -R hermes:hermes /opt/tools
 
 ENV OFFICECLI_SKIP_UPDATE=1
 ENV PPT_MASTER_HOME=/opt/tools/ppt-master
