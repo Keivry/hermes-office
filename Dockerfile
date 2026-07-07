@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     imagemagick \
     libcairo2-dev \
+    libicu-dev \
     pandoc \
     pkg-config \
     poppler-utils \
