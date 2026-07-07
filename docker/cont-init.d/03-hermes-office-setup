@@ -33,19 +33,18 @@ as_hermes() { [ "$(id -u)" = 0 ] || { "$@"; return; }; s6-setuidgid hermes "$@";
 if [ -f "$HERMES_HOME/config.yaml" ]; then
     as_hermes python3 -c "
 import os, yaml
-config_path = os.environ.get('HERMES_HOME', '/opt/data') + '/config.yaml'
-if os.path.exists(config_path):
-    with open(config_path) as f:
-        cfg = yaml.safe_load(f) or {}
-    plugins = cfg.setdefault('plugins', {})
-    enabled = plugins.setdefault('enabled', [])
-    modified = False
-    if 'rtk-rewrite' not in enabled:
-        enabled.append('rtk-rewrite')
-        modified = True
-    if modified:
-        with open(config_path, 'w') as f:
-            yaml.dump(cfg, f)
+cfg_path = os.environ['HERMES_HOME'] + '/config.yaml'
+with open(cfg_path) as f:
+    cfg = yaml.safe_load(f) or {}
+plugins = cfg.setdefault('plugins', {})
+enabled = plugins.setdefault('enabled', [])
+if 'rtk-rewrite' not in enabled:
+    enabled.append('rtk-rewrite')
+    with open(cfg_path, 'w') as f:
+        yaml.dump(cfg, f)
+    print('[office-setup] Enabled rtk-rewrite plugin')
+else:
+    print('[office-setup] rtk-rewrite already enabled')
 " || echo "[office-setup] Warning: rtk-rewrite plugin enablement failed; continuing"
 fi
 

@@ -1,14 +1,14 @@
-ARG HERMES_AGENT_VERSION=v2026.6.5
+ARG HERMES_AGENT_VERSION=v2026.7.1
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.116
+ARG OFFICECLI_VERSION=v1.0.129
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
-ARG PPT_MASTER_VERSION=v2.11.0
+ARG PPT_MASTER_VERSION=v3.1.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.104.0
+ARG DOCLING_VERSION=2.110.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.12.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=ada78018bdfa30d1c766596cd32d910dbf5b03424cd859231b6d2a00533de922
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.27.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=ba77816bbde883c0c2075a1e284cf2e6f324472d4523442f5e3ae0812a98ae1e
 ARG PDFCPU_VERSION=0.13.0
@@ -17,8 +17,8 @@ ARG BUN_VERSION=1.3.14
 ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
-ARG CLAWMEM_VERSION=0.10.7
-ARG RTK_VERSION=v0.42.4
+ARG CLAWMEM_VERSION=0.20.0
+ARG RTK_VERSION=v0.43.0
 ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 
 LABEL org.opencontainers.image.title="hermes-office"
@@ -39,7 +39,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     imagemagick \
     libcairo2-dev \
-    libicu-dev \
     pandoc \
     pkg-config \
     poppler-utils \
@@ -90,7 +89,7 @@ RUN mkdir -p /opt/tools /opt/tools/clawmem-plugin \
 # can be added under USER hermes.
 RUN chown -R hermes:hermes /opt/hermes/.venv
 
-# Install rtk-hermes into Hermes venv as root (venv may be root-owned in v0.17.0 base)
+# Install rtk-hermes into Hermes venv as root (venv may be root-owned in v0.18.0 base)
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
     "rtk-hermes==1.2.3"
 
