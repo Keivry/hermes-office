@@ -112,5 +112,5 @@ for f in *.jpg; do magick "$f" -strip -interlace Plane -quality 82 "$f"; done
 ---
 - 涉及 PDF 输入/输出时，受 ImageMagick 安全策略影响，某些发行版可能默认限制 PDF coder；如果报 policy error，不要硬改系统策略，优先改用更合适的 PDF 工具。
 - 对用户给出的原图做 destructive overwrite 前，优先输出到新文件名，除非用户明确要求覆盖。
-- 如果任务核心是 PDF 内容提取/结构化转换，不要硬用 ImageMagick，优先考虑 `docling-local` 或 `ocr-and-documents`。
-- 如果任务核心是 PDF 合并、拆分、加水印、页重组等文件工程操作，优先考虑 `pdfcpu-local` 或 `pdf-structure-tools`。
+- 如果任务核心是 PDF 内容提取/结构化转换，不要硬用 ImageMagick，优先考虑 `document-extraction`。
+- 如果任务核心是 PDF 合并、拆分、加水印、页重组等文件工程操作，优先考虑 `pdf-tools`。

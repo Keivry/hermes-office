@@ -124,5 +124,5 @@ officecli view demo.pptx issues --json
 边界
 ---
 - **OfficeCLI 最适合精确修改与自动化处理。**
-- 如果用户要的是“从 PDF / 网页 / 长文直接生成一套高设计感、可编辑的完整 PPT”，优先考虑 `ppt-master-local`。
+- 如果用户要的是"从 PDF / 网页 / 长文直接生成一套高设计感、可编辑的完整 PPT"，优先考虑 `presentation-tools`。
 - 只有当 L1/L2 不够时，才使用 `raw` / `raw-set`。
