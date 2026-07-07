@@ -83,11 +83,10 @@ The image now vendors companion skills under `skills/productivity/` and copies t
 Bundled image-specific skills:
 - `document-tool-router`
 - `officecli`
-- `docling-local`
+- `document-extraction`
 - `imagemagick-cli`
-- `pdfcpu-local`
-- `pdf-structure-tools`
-- `ppt-master-local`
+- `pdf-tools`
+- `presentation-tools`
 
 This keeps natural-language routing aligned with the actual toolchain in the image, instead of depending on ad-hoc local skills in `/opt/data/skills`.
 
@@ -322,7 +321,7 @@ The base Hermes image already ships generic `powerpoint` and `ocr-and-documents`
 
 Current recommendation:
 - use `officecli` for precise edits to existing `.docx/.xlsx/.pptx`
-- use `ppt-master-local` for generating a full new editable deck from source material
+- use `presentation-tools` (ppt-master branch) for generating a full new editable deck from source material
 - use bundled `powerpoint` skill primarily as an analysis/editing reference for existing `.pptx`, not as proof that `markitdown`, `pptxgenjs`, and `soffice` are all bundled here
 - use `ocr-and-documents` for routing OCR-heavy requests, but remember this image intentionally does **not** bundle PaddleOCR or marker-pdf-scale heavy OCR stacks
 
