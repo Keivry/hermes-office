@@ -21,7 +21,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.129`
+- Current pinned version in `Dockerfile`: `v1.0.132`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
@@ -37,10 +37,10 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.110.0`
+- Current pinned version in `Dockerfile`: `2.111.0`
 - Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.12.0+cpu` and `torchvision==0.27.0+cpu`
-  2. install `docling==2.110.0` from the normal Python package index
+  2. install `docling==2.111.0` from the normal Python package index
 - The upstream Hermes base image `[tool.uv] exclude-newer` policy was removed, so no freshness window constraint applies to docling or other PyPI installs
 - Current image installs the base `docling` package (not the optional VLM extras)
 
@@ -64,7 +64,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 
 ### ClawMem
 - Installed globally as `clawmem` at `/usr/local/bin/clawmem`
-- Current pinned version in `Dockerfile`: `0.20.0`
+- Current pinned version in `Dockerfile`: `0.20.2`
 - The Hermes memory provider plugin is staged under `/opt/tools/clawmem-plugin`
 - On container start, the s6 cont-init.d hook syncs that plugin into `$HERMES_HOME/plugins/clawmem`
 - The image defaults to **external-model / remote-GPU** style operation:
