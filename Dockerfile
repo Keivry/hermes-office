@@ -1,14 +1,14 @@
-ARG HERMES_AGENT_VERSION=v2026.7.20
+ARG HERMES_AGENT_VERSION=v2026.7.30
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.139
+ARG OFFICECLI_VERSION=v1.0.143
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
-ARG PPT_MASTER_VERSION=v4.0.0
+ARG PPT_MASTER_VERSION=v4.2.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.114.0
+ARG DOCLING_VERSION=2.117.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=3fbf9c9d1f3c10c2d59d04aca426dee9ccc6ceb32d255c61e93acc3b4f75fae6
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.28.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=c6373ec4c2f922e89f45ac91889404d312ba29a31f205b0ad9a725a3894ca246
 ARG PDFCPU_VERSION=0.13.0
@@ -18,7 +18,7 @@ ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
 ARG CLAWMEM_VERSION=0.28.0
-ARG RTK_VERSION=v0.43.0
+ARG RTK_VERSION=v0.44.1
 ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 
 LABEL org.opencontainers.image.title="hermes-office"

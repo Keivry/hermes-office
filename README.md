@@ -21,14 +21,14 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.139`
+- Current pinned version in `Dockerfile`: `v1.0.143`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
 - `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
-- Current pinned version in `Dockerfile`: `v4.0.0`
+- Current pinned version in `Dockerfile`: `v4.2.0`
 
 ### ImageMagick
 - Installed from the distro package as `imagemagick`
@@ -37,10 +37,10 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.114.0`
+- Current pinned version in `Dockerfile`: `2.117.0`
 - Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.13.0+cpu` and `torchvision==0.28.0+cpu`
-  2. install `docling==2.114.0` from the normal Python package index
+  2. install `docling==2.117.0` from the normal Python package index
 - The upstream Hermes base image `[tool.uv] exclude-newer` policy was removed, so no freshness window constraint applies to docling or other PyPI installs
 - Current image installs the base `docling` package (not the optional VLM extras)
 
@@ -205,7 +205,7 @@ If another service already owns `9089` (for example Qwen3.5), either move that s
 
 ### What's in this image
 
-- **RTK binary** at `/usr/local/bin/rtk` — pinned to `v0.43.0` (musl static binary)
+- **RTK binary** at `/usr/local/bin/rtk` — pinned to `v0.44.1` (musl static binary)
 - **rtk-hermes plugin** (`ogallotti/rtk-hermes` v1.2.3) — installed into Hermes' Python venv and auto-enabled in `config.yaml` via the s6 cont-init.d hook
 
 The Hermes plugin automatically rewrites terminal commands through `rtk` *before* execution, so the agent gets token-compressed output without any manual `rtk` prefix needed.
