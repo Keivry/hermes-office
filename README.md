@@ -90,6 +90,8 @@ Bundled image-specific skills:
 
 This keeps natural-language routing aligned with the actual toolchain in the image, instead of depending on ad-hoc local skills in `/opt/data/skills`.
 
+> **分工约定**：官方 Hermes 镜像自带的 `docx` / `xlsx` / `pdf` skills 负责**从零创建**文档（docx-js / openpyxl / reportlab、PDF AcroForm 表单、Word redlining）；本镜像的 `officecli` / `pdf-tools` 负责**编辑已有文件**（DOM 式精确编辑、PDF 工程操作 qpdf/pdfcpu/nano-pdf）。`document-tool-router` 路由卡按此分工路由。
+
 ## Included extra system packages
 
 The image adds these packages beyond the official Hermes base image:

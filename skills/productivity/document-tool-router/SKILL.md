@@ -2,7 +2,7 @@
 name: document-tool-router
 title: 文档/图片/Office 工具路由卡
 description: 在 Office、PPT、PDF、图片、OCR、文档理解任务之间做自然语言路由，优先选对工具，再执行。文档处理/Office/PDF/图片/OCR 路由决策 时 **MUST** 加载。
-version: 1.0.0
+version: 1.1.0
 tags: [router, office, pdf, image, ppt, ocr]
 ---
 
@@ -14,34 +14,61 @@ tags: [router, office, pdf, image, ppt, ocr]
 先做哪一步
 ---
 1. 先识别用户要的是：
-   - **编辑现有 Office 文件**
+   - **从零创建**新文档（Word / Excel / PDF）
+   - **编辑现有** Office 文件
    - **生成整套 PPT**
    - **PDF 文件工程操作**
    - **PDF/文档内容抽取或结构化转换**
    - **图片处理**
    - **扫描件/OCR**
 2. 再选择最合适的技能或工具。
-3. 不要因为某个工具"已经装在镜像里"就强行使用；以任务匹配度优先。
+3. 不要因为某个工具“已经装在镜像里”就强行使用；以任务匹配度优先。
+
+关键分工原则
+---
+镜像里有两套文档工具链，**按「创建 vs 编辑」分工，不要混用**：
+
+- **官方 skill 套件**（`docx` / `xlsx` / `pdf`）：擅长**从零创建**（docx-js / openpyxl / reportlab）、PDF 表单填写（AcroForm 脚本 + forms.md 工作流）、Word redlining（修订/批注）。创建类任务首选。
+- **hermes-office 套件**（`officecli` / `pdf-tools`）：擅长**对已有文件做 DOM 式精确编辑**（OfficeCLI）和 **PDF 工程操作**（qpdf / poppler / pdfcpu / nano-pdf）。编辑/工程类任务首选。
 
 路由决策表
 ---
 
-### A. 用户要精细修改现有 Office 文件
+### A. 用户要创建新 Word / Excel / PDF 文档
 典型说法：
-- "改一下这个 docx 的标题样式"
-- "把 Excel 的 A1 改成季度汇总"
-- "删掉这个 pptx 第一页第二个形状"
-- "检查这个 pptx 有哪些格式问题"
+- “帮我生成一份 Word 合同/报告”
+- “新建一个 Excel 统计表”
+- “把这段内容做成 PDF 文件”
+- “给这个 PDF 表单填一下”
+
+优先：
+- 新建 Word → `docx`（docx-js 从零创建，模板、redlining、批注）
+- 新建 Excel → `xlsx`（openpyxl 创建 + 公式重算校验）
+- 新建/填充 PDF → `pdf`（reportlab 创建、AcroForm 表单填写，见 forms.md）
+
+原因：
+- 官方套件自带完整创建脚本与校验流程（recalc.py / validate.py / fill_fillable_fields.py）
+- officecli/pdf-tools 的设计重点是编辑已有文件，不是从零生成
+
+---
+
+### B. 用户要精细修改现有 Office 文件（.docx / .xlsx / .pptx）
+典型说法：
+- “改一下这个 docx 的标题样式”
+- “把 Excel 的 A1 改成季度汇总”
+- “删掉这个 pptx 第一页第二个形状”
+- “检查这个 pptx 有哪些格式问题”
 
 优先：`officecli`
 
 原因：
 - 对 `.docx/.xlsx/.pptx` 做 DOM 式精确编辑最合适
 - 适合已有文件的局部修改、检查、增删改
+- 与 `docx`/`xlsx` 的“从零创建”定位互补（创建走官方，编辑走 officecli）
 
 ---
 
-### B. 用户要生成一整套高设计感 PPT
+### C. 用户要生成一整套高设计感 PPT
 典型说法：
 - "把这个 PDF 做成 PPT"
 - "根据这篇文章生成汇报幻灯片"
@@ -57,7 +84,7 @@ tags: [router, office, pdf, image, ppt, ocr]
 
 ---
 
-### C. 用户提到任何 `.pptx`，尤其是读取/分析/修改已有演示文稿
+### D. 用户提到任何 `.pptx`，尤其是读取/分析/修改已有演示文稿
 典型说法：
 - "帮我看看这个 pptx 里写了什么"
 - "提取这个演示文稿的内容"
@@ -72,13 +99,12 @@ tags: [router, office, pdf, image, ppt, ocr]
 
 ---
 
-### D. 用户要 PDF 文件工程操作
+### E. 用户要 PDF 文件工程操作
 典型说法：
 - "合并这几个 pdf"
 - "拆分这个 pdf"
 - "给 pdf 加水印"
 - "优化一下 pdf 体积"
-- "导出这个表单字段"
 
 优先：`pdf-tools`
 
@@ -89,7 +115,7 @@ tags: [router, office, pdf, image, ppt, ocr]
 
 ---
 
-### E. 用户要快速查看 PDF 信息、抽文字、抽图片、按页转图片
+### F. 用户要快速查看 PDF 信息、抽文字、抽图片、按页转图片
 典型说法：
 - "看这个 pdf 有多少页"
 - "提取 pdf 的文字"
@@ -100,7 +126,7 @@ tags: [router, office, pdf, image, ppt, ocr]
 
 ---
 
-### F. 用户要文档理解、结构化转换、转 Markdown / JSON
+### G. 用户要文档理解、结构化转换、转 Markdown / JSON
 典型说法：
 - "把这个 pdf 转 markdown"
 - "提取这个文档的正文和表格"
@@ -114,7 +140,7 @@ tags: [router, office, pdf, image, ppt, ocr]
 
 ---
 
-### G. 用户要扫描件 OCR / OCR PDF / 图文识别
+### H. 用户要扫描件 OCR / OCR PDF / 图文识别
 典型说法：
 - "这个扫描件识别一下"
 - "给这个 pdf 加 OCR 文本层"
@@ -126,14 +152,14 @@ tags: [router, office, pdf, image, ppt, ocr]
 
 ---
 
-### H. 用户要图片处理
+### I. 用户要图片处理
 典型说法：
-- "把这张图缩小到 1200 宽"
-- "压缩一下图片体积"
-- "批量转 webp"
-- "给图片打水印"
-- "裁掉四周留白"
-- "把多张图拼成一张"
+- “把这张图缩小到 1200 宽”
+- “压缩一下图片体积”
+- “批量转 webp”
+- “给图片打水印”
+- “裁掉四周留白”
+- “把多张图拼成一张”
 
 优先：`imagemagick-cli`
 
@@ -143,15 +169,19 @@ tags: [router, office, pdf, image, ppt, ocr]
 
 冲突处理规则
 ---
-- **已有 Office 文件的精细修改**：`officecli` 胜过 `presentation-tools`
+- **从零创建 Word/Excel/PDF**：官方 `docx`/`xlsx`/`pdf` 胜过 `officecli`/`pdf-tools`
+- **已有 Office 文件的精细修改**：`officecli` 胜过官方 `docx`/`xlsx`
+- **PDF 表单填写**：官方 `pdf`（forms.md + AcroForm 脚本）胜过 `pdf-tools`
+- **PDF 工程操作（合并/拆分/水印/加密）**：`pdf-tools` 胜过官方 `pdf`
 - **整套新 PPT 生成**：`presentation-tools` (ppt-master 分支) 胜过 `document-extraction`
-- **PDF 文件工程操作**：`pdf-tools` 胜过 `document-extraction`
 - **文档理解/markdown/json 输出**：`document-extraction` 胜过 `pdf-tools`
 - **图片处理**：`imagemagick-cli` 胜过其他所有文档工具
 
 最简口诀
 ---
-- 改 Office：`officecli`
+- 新建 Word / Excel / PDF：`docx` / `xlsx` / `pdf`
+- 填 PDF 表单：`pdf`（官方）
+- 改现有 Office（docx/xlsx/pptx）：`officecli`
 - 看/改现有 PPTX / 从材料生成整套 PPT：`presentation-tools`
 - 合并拆分加水印 PDF：`pdf-tools`
 - 文档转 markdown/json / OCR：`document-extraction`
@@ -162,5 +192,6 @@ tags: [router, office, pdf, image, ppt, ocr]
 - 不要因为用户没说技能名就要求他补技能名；应根据自然语言主动路由。
 - 若任务同时跨多个域，按主目标选主技能，再用其他工具补刀。
 - 如果判断不清楚，就优先问自己：
+  - 这是**创建新文档**，还是**编辑已有文件**？→ 创建走官方 docx/xlsx/pdf，编辑走 officecli/pdf-tools
   - 这是**文件工程操作**，还是**内容理解/结构化导出**？
   - 这是**编辑已有文件**，还是**生成新文件**？

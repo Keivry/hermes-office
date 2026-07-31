@@ -1,7 +1,7 @@
 ---
 name: imagemagick-cli
 title: ImageMagick 图片处理命令行
-description: 用 ImageMagick 处理图片转换、缩放、裁剪、压缩、水印、拼接与批量操作。适合从自然语言任务直接落到 CLI。
+description: 用 ImageMagick 处理图片转换、缩放、裁剪、压缩、水印、拼接与批量操作。图片处理/格式转换/修图 时 **MUST** 加载。
 version: 1.0.0
 tags: [image, imagemagick, convert, resize, watermark, crop]
 ---

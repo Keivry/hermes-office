@@ -1,7 +1,7 @@
 ---
 name: officecli
 title: OfficeCLI 文档创建与修改
-description: 用 OfficeCLI 直接创建、读取、检查、修改 .docx / .xlsx / .pptx。适合做 Office 文档的精确编辑与自动化。
+description: 用 OfficeCLI 直接创建、读取、检查、修改 .docx / .xlsx / .pptx。Office 文档精确编辑/自动化 时 **MUST** 加载。
 version: 1.0.0
 tags: [office, docx, xlsx, pptx, cli, docker]
 ---
