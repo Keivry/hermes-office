@@ -102,11 +102,13 @@ COPY docker/cont-init.d/ /etc/cont-init.d/
 
 USER root
 
-# Create venvs as root — chown back to hermes so runtime access works
-RUN uv venv /opt/tools/ppt-master/.venv \
+# Create venvs as root — chown back to hermes so runtime access works.
+# NOTE: uv 0.11+ in base v2026.8.3 defaults to downloading CPython 3.11 when
+# no --python is given, which breaks the cp313 torch wheels. Pin 3.13 explicitly.
+RUN uv venv --python 3.13 /opt/tools/ppt-master/.venv \
     && uv pip install --python /opt/tools/ppt-master/.venv/bin/python --no-cache-dir -r /opt/tools/ppt-master/requirements.txt \
     && mkdir -p /opt/tools/docling \
-    && uv venv /opt/tools/docling/.venv \
+    && uv venv --python 3.13 /opt/tools/docling/.venv \
     && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
         "${TORCH_CPU_WHL}" "${TORCHVISION_CPU_WHL}" \
     && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
