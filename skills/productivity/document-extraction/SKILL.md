@@ -39,12 +39,46 @@ Handles PDF-to-markdown via Firecrawl. Only use local when URL is unavailable or
 Best for: PDF/DOCX/PPTX/HTML to Markdown/HTML/JSON/DocTags. Good for AI-consumable output.
 
 ```bash
-docling report.pdf -o report.md
-docling report.pdf --format json -o report.json
-docling report.pdf --format html -o report.html
-docling https://arxiv.org/pdf/2206.01062 -o paper.md
-docling report.pdf --pipeline vlm --vlm-model granite_docling
+# 本环境（hermes-office 镜像）docling 在独立 venv，PATH 已含，直接调用
+docling convert report.pdf --output out/ --to md
+docling convert report.pdf --output out/ --to json
+docling convert /path/to/dir/ --output out/ --to md   # 批量目录
+# 注意 v2.x CLI 语法：docling convert <source> --output <dir> --to <fmt>（旧版 -o 已废弃）
 ```
+
+### ⚠️ 本环境 docling 模型已本地化（勿依赖 HF 下载）
+
+- **模型位置**（持久挂载，升级镜像不丢）：`/opt/data/store/docling-models/`
+  - `docling-project--docling-layout-heron/` — 布局模型（163MB，RT-DETR，CPU 可跑）
+  - `docling-project--docling-models/model_artifacts/tableformer/{accurate,fast}/` — 表格模型（202.9MB + 138.7MB）
+- **为什么放 /opt/data**：/opt/tools 是镜像内层，升级镜像即被覆盖；/opt/data 是 bind mount 持久化
+- **下载源**：魔搭 ModelScope（国内直连快，212MB 十几秒）— `AI-ModelScope/docling-models`
+  - 下载 URL 模式：`https://modelscope.cn/models/AI-ModelScope/docling-models/resolve/master/<path>`
+- **Python API 必须显式指定 artifacts_path**（否则 docling 会尝试从 HF 下载/校验快照，可能卡死或报 IncompleteSnapshotError）：
+
+```python
+from pathlib import Path
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+
+opts = PdfPipelineOptions()
+opts.artifacts_path = Path("/opt/data/store/docling-models")
+opts.table_structure_options.mode = TableFormerMode.FAST  # 或 ACCURATE
+opts.do_ocr = False  # 文字版 PDF 不需要 OCR，避免额外下载
+conv = DocumentConverter(
+    allowed_formats=[InputFormat.PDF],
+    format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)},
+)
+result = conv.convert("input.pdf")
+print(result.document.export_to_markdown())
+```
+
+- **目录结构约定**（docling 源码硬编码）：`<artifacts_path>/<repo_folder_name>/<model_path>`
+  - layout: `docling-project--docling-layout-heron/model.safetensors` + `config.json` + `preprocessor_config.json`
+  - table: `docling-project--docling-models/model_artifacts/tableformer/{accurate|fast}/`（safetensors + tm_config.json）
+- **CPU 性能实测**（4 核 CPU，无 GPU）：约 6-8 秒/页，3 页含模型加载 24 秒；100 页约 10-13 分钟。批量用 `--jobs N` 并行
+- **首次转换会从 HF 下载模型**（如果 artifacts_path 未指向本地）：HF 需要代理且慢，务必用本地 artifacts
 
 ---
 
