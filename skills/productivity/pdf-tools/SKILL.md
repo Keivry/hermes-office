@@ -98,6 +98,7 @@ nano-pdf edit contract.pdf 2 "Change client name from 'Acme Corp' to 'Acme Indus
 
 ## Common Pitfalls
 
+- **pdfcpu v0.13+ requires `--force` to overwrite** existing output files or non-empty output directories (`pdfcpu optimize --force in.pdf out.pdf`, `pdfcpu split --force in.pdf outdir`). Without it, the command exits with an error. Add `--force` when the output path already exists.
 - qpdf and pdfcpu overlap in merge/split — prefer pdfcpu for these
 - nano-pdf edits are LLM-based; verify output after editing
 - poppler tools don't handle encrypted PDFs — use qpdf --decrypt first
