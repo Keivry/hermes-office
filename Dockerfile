@@ -103,9 +103,14 @@ COPY docker/cont-init.d/ /etc/cont-init.d/
 USER root
 
 # Create venvs as root — chown back to hermes so runtime access works.
-# NOTE: uv 0.11+ in base v2026.8.3 defaults to downloading CPython 3.11 when
-# no --python is given, which breaks the cp313 torch wheels. Pin 3.13 explicitly.
-RUN uv venv --python 3.13 /opt/tools/ppt-master/.venv \
+# NOTE 1: uv 0.11+ in base v2026.8.3 defaults to downloading CPython 3.11 when
+#         no --python is given, which breaks the cp313 torch wheels. Pin 3.13.
+# NOTE 2: base v2026.8.3 sets [tool.uv] exclude-newer = "14 days" in
+#         /opt/hermes/pyproject.toml. Since the Dockerfile inherits WORKDIR
+#         /opt/hermes, uv resolves that config and refuses packages published
+#         in the last 14 days (e.g. docling 2.118.0). Run from /tmp to bypass.
+RUN cd /tmp \
+    && uv venv --python 3.13 /opt/tools/ppt-master/.venv \
     && uv pip install --python /opt/tools/ppt-master/.venv/bin/python --no-cache-dir -r /opt/tools/ppt-master/requirements.txt \
     && mkdir -p /opt/tools/docling \
     && uv venv --python 3.13 /opt/tools/docling/.venv \
