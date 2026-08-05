@@ -41,6 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2-dev \
     libicu-dev \
     pandoc \
+    patch \
     pkg-config \
     poppler-utils \
     qpdf \
@@ -93,6 +94,21 @@ RUN chown -R hermes:hermes /opt/hermes/.venv
 # Install rtk-hermes into Hermes venv as root (venv may be root-owned in v0.18.0 base)
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
     "rtk-hermes==1.2.3"
+
+# ── Upstream hotfix patches ──────────────────────────────────────────────
+# Apply pending upstream fixes from patches/ (unified diff, `patch -p1`).
+# Each .patch is applied in lexicographic order against /opt/hermes; a failing
+# patch aborts the build so a half-patched image never ships. Remove a patch
+# file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
+COPY patches/ /tmp/hermes-patches/
+RUN set -eux; \
+    if ls /tmp/hermes-patches/*.patch >/dev/null 2>&1; then \
+        for p in /tmp/hermes-patches/*.patch; do \
+            echo "==> Applying $(basename "$p")"; \
+            (cd /opt/hermes && patch -p1 < "$p"); \
+        done; \
+    fi; \
+    rm -rf /tmp/hermes-patches
 
 COPY skills/ /opt/hermes/skills/
 # s6-overlay cont-init.d hook: runs after base stage2 setup (01-hermes-setup),
