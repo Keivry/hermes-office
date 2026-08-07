@@ -1,0 +1,22 @@
+--- a/agent/chat_completion_helpers.py
++++ b/agent/chat_completion_helpers.py
+@@ -540,6 +540,19 @@
+         return False
+     if getattr(agent, "provider", None) == "moa":
+         return False
++    # #71268: the #62151 workaround was far too broad — it forced EVERY
++    # cron/delegation request onto the non-streaming direct_api_call() path,
++    # even for custom providers. Non-streaming requests must wait for the
++    # entire response before the first byte arrives; behind a proxy with a
++    # response-header timeout the upstream disconnects
++    # (ServerDisconnectedError) and retries exhaust. Keep the inline path
++    # ONLY for providers with actual nested-pool deadlock evidence (#62151
++    # openrouter); everything else uses the streaming path — SSE headers
++    # return in <1s, tokens flow progressively, the connection never sits
++    # idle waiting for a complete response.
++    _provider = getattr(agent, "provider", None) or ""
++    if _provider not in {"openrouter", "nous"}:
++        return False
+     if getattr(agent, "platform", None) == "cron":
+         return True
+     # Delegated child (delegate_task sync or background) — detected via the
