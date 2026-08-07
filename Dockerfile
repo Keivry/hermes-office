@@ -100,6 +100,10 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # Each .patch is applied in lexicographic order against /opt/hermes; a failing
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
+# 005/006 = upstream #80838 (merged 2026-08-07): cron manual-run gateway-loop
+#   delivery + Matrix standalone wait_for — drop when version > v2026.8.3.
+# 007 = upstream #77100 (open): Matrix adapter loop-mismatch bridge — keep
+#   until #77100 merges upstream.
 COPY patches/ /tmp/hermes-patches/
 RUN set -eux; \
     if ls /tmp/hermes-patches/*.patch >/dev/null 2>&1; then \
