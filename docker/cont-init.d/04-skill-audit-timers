@@ -1,0 +1,73 @@
+#!/command/with-contenv sh
+# s6-overlay cont-init.d hook — skill-audit timers (04-skill-audit-timers)
+# Runs as root after 03-hermes-office-setup. Registers two s6 longrun
+# services into the dynamic scandir (/run/service) so the external timer
+# contract is met WITHOUT hermes cron (design D5: no hermes cron dep —
+# no_agent cron has 1h wall-clock timeout and couples delivery to jobs.json).
+#
+#   skill-audit-main      daily 03:30  main.py run --no-semantic
+#   skill-audit-watchdog  hourly :15   watchdog.py (independent check)
+#
+# Service definitions live in the project volume at
+# /opt/data/scripts/skill-audit/s6/<svc>/ (run + type). They are copied
+# into /run/service on every boot (tmpfs is wiped on restart), with a
+# hermes-owned supervise/ skeleton seeded BEFORE s6-svscan picks them up
+# (same pattern as container_boot._register_service, PR #30136) so the
+# unprivileged hermes user can s6-svc/s6-svstat them at runtime.
+set -eu
+
+PROJECT_DIR="${HERMES_HOME:-/opt/data}/scripts/skill-audit"
+S6_SRC="$PROJECT_DIR/s6"
+SCANDIR=/run/service
+
+if [ ! -d "$S6_SRC" ] || [ ! -f "$PROJECT_DIR/main.py" ]; then
+    echo "[skill-audit-timers] project not present at $PROJECT_DIR; skipping timer registration"
+    exit 0
+fi
+
+# Seed a hermes-owned supervise skeleton inside an s6 service dir so that
+# when s6-supervise picks the slot up (as root) it EEXIST-inherits our
+# ownership instead of creating a root-only 0700 supervise/ that blocks
+# the unprivileged hermes user's s6-svc / s6-svstat calls. Mirrors
+# hermes_cli.service_manager._seed_supervise_skeleton.
+seed_skeleton() {
+    svc="$1"
+    mkdir -p "$svc/event" "$svc/supervise/event"
+    chmod 03730 "$svc/event"
+    chmod 03730 "$svc/supervise/event"
+    chmod 0755 "$svc/supervise"
+    if [ ! -p "$svc/supervise/control" ]; then
+        mkfifo "$svc/supervise/control"
+    fi
+    chmod 0660 "$svc/supervise/control" 2>/dev/null || true
+    chown -R hermes:hermes "$svc/event" "$svc/supervise" 2>/dev/null || true
+}
+
+for name in skill-audit-main skill-audit-watchdog; do
+    src="$S6_SRC/$name"
+    [ -f "$src/run" ] || { echo "[skill-audit-timers] missing $src/run; skipping $name"; continue; }
+    dst="$SCANDIR/$name"
+    # Build in a dot-prefixed staging dir (s6-svscan ignores dot entries),
+    # then publish atomically.
+    tmp="$SCANDIR/.$name.tmp"
+    rm -rf "$tmp"
+    mkdir -p "$tmp"
+    cp "$src/run" "$tmp/run"
+    cp "$src/type" "$tmp/type" 2>/dev/null || printf 'longrun\n' > "$tmp/type"
+    chmod 0755 "$tmp/run"
+    # Start state: leave the service UP (no `down` marker) — the run
+    # script's own sleep-loop controls the cadence.
+    seed_skeleton "$tmp"
+    rm -rf "$dst"
+    mv "$tmp" "$dst"
+    echo "[skill-audit-timers] registered $name"
+done
+
+# Ask s6-svscan to rescan the dynamic scandir so the new slots start.
+if command -v s6-svscanctl >/dev/null 2>&1; then
+    s6-svscanctl -a "$SCANDIR" || true
+else
+    /package/admin/s6-2.15.0.0/command/s6-svscanctl -a "$SCANDIR" 2>/dev/null || true
+fi
+
+echo "[skill-audit-timers] done"
