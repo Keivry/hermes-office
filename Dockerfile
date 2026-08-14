@@ -141,6 +141,29 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   PR tests/website hunks excluded (not shipped in the production image —
 #   including them makes `patch` fail and abort the build). Keep until #44347
 #   merges upstream; then drop and bump HERMES_AGENT_VERSION.
+# 009 = upstream #64335/#83203/#83312 (open): sanitize_api_messages dedup pass
+#   can collapse a repeated tool_call_id turn into tool_calls: [] which strict
+#   providers (DeepSeek, opencode-go) reject with HTTP 400, permanently wedging
+#   the session. Drop the key instead of rewriting an empty array (same fix as
+#   PRs #64345/#86020/#83622 — all open/duplicate-labeled upstream). Keep until
+#   upstream merges any of them.
+# 010 = upstream #83312 (open): defense-in-depth at the ChatCompletions wire
+#   boundary — strip tool_calls: [] on assistant messages right before send,
+#   catching paths that re-introduce the key after the sanitizer (PRs #83600/
+#   #72591, both open). Keep until upstream merges.
+# 011 = upstream #85207 (open): gateway restart mid-turn can spawn TWO parallel
+#   conversation loops on one session (detached restart overlap), duplicating
+#   the whole history and delivering divergent finals. Durable active-turn
+#   marker now records the owning gateway PID; boot recovery/auto-resume refuse
+#   to start a second loop while the owner is alive (PR #85285, open). Keep
+#   until #85285 merges upstream.
+# 012 = upstream #58674 (open): gateway stderr handler has no timestamp —
+#   docker logs / gateway.error.log lines cannot be dated. Add %(asctime)s to
+#   the stderr formatter (PR #59137, open; #59132 closed as superseded). Keep
+#   until #59137 merges upstream.
+# 013 = local-only (no upstream issue): hermes_cli/update_cmd.py:2564 docstring
+#   has invalid escape '\S' → SyntaxWarning on every import under Python 3.12+.
+#   Escape as '\\S'. No upstream tracking needed; drop when upstream fixes it.
 COPY patches/ /tmp/hermes-patches/
 RUN set -eux; \
     if ls /tmp/hermes-patches/*.patch >/dev/null 2>&1; then \
