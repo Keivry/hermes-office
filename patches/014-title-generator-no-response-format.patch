@@ -1,0 +1,52 @@
+--- a/agent/title_generator.py
++++ b/agent/title_generator.py
+@@ -87,29 +87,18 @@
+ _LANGUAGE_RULE_MATCH_USER = "- Write the title in the same language as the user's message."
+ _LANGUAGE_RULE_PINNED = "- Write the title in {language}."
+ 
+-# JSON schema constraining the response to a single title field. Removes the
+-# whole class of "model answered the prompt instead of titling it" failures
+-# that produced titles like "<title>...</title>" and "User: Yep, that's the
+-# catch —" in real session history.
+-_TITLE_RESPONSE_FORMAT = {
+-    "type": "json_schema",
+-    "json_schema": {
+-        "name": "session_title",
+-        "strict": True,
+-        "schema": {
+-            "type": "object",
+-            "properties": {"title": {"type": "string"}},
+-            "required": ["title"],
+-            "additionalProperties": False,
+-        },
+-    },
+-}
+-
+-# Control-tag wrappers that surround machine-authored content inside what is
+-# nominally a "user" message. Titling from these is what produces a session
+-# named after a slash command or an injected reminder rather than the user's
+-# actual request. Ported from Codex CLI's RECOGNIZED_CONTROL_WRAPPERS, which
+-# strips them (and keeps titling) rather than refusing outright.
++# Vendor patch 014: do NOT send response_format to the model. The upstream
++# two-stage title generator (v2026.8.3) unconditionally sent
++# response_format={"type": "json_schema", "json_schema": {...strict...}}, but
++# that field is OpenAI-only: Console Go (opencode.ai zen), DeepSeek, and the
++# Anthropic Messages API all reject it with HTTP 400 ("This response_format
++# type is unavailable now"), so title generation failed on every fresh
++# session. _extract_title_text() already has a multi-tier fallback (JSON dict
++# scan -> loose "title" regex -> prose first-line + think-block strip), so a
++# provider that just answers in prose still titles correctly. Upstream family:
++# #82816 (issue), #85713 (PR, retry-cascade approach, not merged). Revisit
++# when #85713 merges.
++
+ _CONTROL_WRAPPERS = (
+     ("<command-message>", "</command-message>"),
+     ("<command-name>", "</command-name>"),
+@@ -401,7 +390,6 @@
+             temperature=0.3,
+             timeout=timeout,
+             main_runtime=main_runtime,
+-            extra_body={"response_format": _TITLE_RESPONSE_FORMAT},
+         )
+         content = response.choices[0].message.content or ""
+         return _clean_title(_extract_title_text(content))

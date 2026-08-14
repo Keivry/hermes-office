@@ -164,6 +164,12 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # 013 = local-only (no upstream issue): hermes_cli/update_cmd.py:2564 docstring
 #   has invalid escape '\S' → SyntaxWarning on every import under Python 3.12+.
 #   Escape as '\\S'. No upstream tracking needed; drop when upstream fixes it.
+# 014 = upstream #82816/#85713 (open): title_generator unconditionally sent
+#   OpenAI-only response_format json_schema strict → Console Go / DeepSeek /
+#   Anthropic all 400 ("This response_format type is unavailable now") on every
+#   fresh session. This patch drops response_format entirely; _extract_title_text
+#   already falls back through JSON-dict → loose regex → prose+think-strip, so
+#   titles still work. Keep until #85713 (retry-cascade) merges upstream.
 COPY patches/ /tmp/hermes-patches/
 RUN set -eux; \
     if ls /tmp/hermes-patches/*.patch >/dev/null 2>&1; then \
