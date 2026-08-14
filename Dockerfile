@@ -134,6 +134,13 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   (#71268). Keep — upstream still forces all cron/delegation inline.
 # 007 = upstream #77100 (open): Matrix adapter loop-mismatch bridge — keep
 #   until #77100 merges upstream.
+# 008 = upstream #44347 (open): file_read toolset (read-only subset of file:
+#   read_file + search_files, NO write/patch) — sandboxed read-only agents
+#   (skill-audit) can inspect files without a write path. Trimmed to the 3
+#   runtime files (toolsets.py / hermes_cli/setup.py / hermes_cli/tools_config.py);
+#   PR tests/website hunks excluded (not shipped in the production image —
+#   including them makes `patch` fail and abort the build). Keep until #44347
+#   merges upstream; then drop and bump HERMES_AGENT_VERSION.
 COPY patches/ /tmp/hermes-patches/
 RUN set -eux; \
     if ls /tmp/hermes-patches/*.patch >/dev/null 2>&1; then \
