@@ -170,6 +170,13 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   fresh session. This patch drops response_format entirely; _extract_title_text
 #   already falls back through JSON-dict → loose regex → prose+think-strip, so
 #   titles still work. Keep until #85713 (retry-cascade) merges upstream.
+# 015 = upstream #78888 (open): checkpoint_manager DEFAULT_EXCLUDES missing
+#   node-compile-cache/ — the desktop/TUI launcher writes this cache (can be
+#   root-owned) into <workdir>/tmp/node-compile-cache/, so `git add -A` aborts
+#   with Permission denied (rc=128) and affected workdirs get zero checkpoints.
+#   Adds the exclude + _ensure_store_excludes() so existing stores also pick it
+#   up. Trimmed to tools/checkpoint_manager.py (PR tests excluded). Keep until
+#   #78929/#78944 merge upstream.
 COPY patches/ /tmp/hermes-patches/
 RUN set -eux; \
     if ls /tmp/hermes-patches/*.patch >/dev/null 2>&1; then \
