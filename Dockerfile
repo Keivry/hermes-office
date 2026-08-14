@@ -20,9 +20,12 @@ ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_
 ARG CLAWMEM_VERSION=0.36.0
 ARG RTK_VERSION=v0.45.0
 ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
+ARG GH_VERSION=v2.97.0
+ARG GH_ASSET=gh_2.97.0_linux_amd64.tar.gz
+ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH_ASSET}
 
 LABEL org.opencontainers.image.title="hermes-office"
-LABEL org.opencontainers.image.description="Hermes Agent image bundled with OfficeCLI, PPT Master, ImageMagick, Docling, pdfcpu, qpdf, poppler-utils, Bun, ClawMem, and RTK"
+LABEL org.opencontainers.image.description="Hermes Agent image bundled with OfficeCLI, PPT Master, ImageMagick, Docling, pdfcpu, qpdf, poppler-utils, Bun, ClawMem, RTK, and common CLI utilities (gh, jq, less, ...)"
 LABEL org.opencontainers.image.source="https://github.com/Keivry/hermes-office"
 LABEL org.opencontainers.image.vendor="Keivry"
 LABEL org.opencontainers.image.licenses="Apache-2.0, MIT"
@@ -47,6 +50,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     qpdf \
     unzip \
     xz-utils \
+    dnsutils \
+    file \
+    git-lfs \
+    iproute2 \
+    jq \
+    less \
+    lsof \
+    mtr \
+    net-tools \
+    netcat-openbsd \
+    rsync \
+    sqlite3 \
+    strace \
+    traceroute \
+    tree \
+    wget \
+    yq \
+    zip \
+    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL -o /usr/local/bin/officecli \
@@ -58,6 +80,12 @@ RUN curl -fsSL "${PDFCPU_ASSET_URL}" -o /tmp/pdfcpu.tar.xz \
     && tar -xJf /tmp/pdfcpu.tar.xz -C /tmp \
     && install -m 0755 /tmp/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64/pdfcpu /usr/local/bin/pdfcpu \
     && rm -rf /tmp/pdfcpu.tar.xz /tmp/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64
+
+RUN curl -fsSL "${GH_ASSET_URL}" -o /tmp/gh.tar.gz \
+    && tar -xzf /tmp/gh.tar.gz -C /tmp \
+    && install -m 0755 "/tmp/gh_${GH_VERSION#v}_linux_amd64/bin/gh" /usr/local/bin/gh \
+    && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION#v}_linux_amd64" \
+    && gh --version
 
 RUN curl -fsSL "${BUN_ASSET_URL}" -o "/tmp/${BUN_ASSET_NAME}" \
     && curl -fsSL "${BUN_SHASUMS_URL}" -o /tmp/SHASUMS256.txt \
@@ -168,6 +196,8 @@ RUN /opt/tools/ppt-master/.venv/bin/python --version \
     && bun --version \
     && node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)' \
     && rtk --version \
+    && gh --version \
+    && git lfs version \
     && pdfcpu version \
     && qpdf --version \
     && pdfinfo -v \
