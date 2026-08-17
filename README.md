@@ -12,7 +12,7 @@ A `nousresearch/hermes-agent`-based Docker image bundled with:
 - [Bun](https://bun.sh/)
 - [ClawMem](https://github.com/yoloshii/ClawMem)
 - [RTK](https://github.com/rtk-ai/rtk) (Rust Token Killer) — CLI proxy that reduces LLM token consumption by 60–90% on terminal commands, with Hermes plugin auto-enabled
-- Common CLI utilities: `gh` (GitHub CLI), `jq`/`yq`, `less`, `wget`, `sqlite3`, `git-lfs`, network diagnostics (`dig`/`nslookup`/`host`, `ss`/`ip`, `netstat`, `nc`, `traceroute`, `mtr`), `rsync`, `lsof`, `strace`, `zip`/`zstd`, `tree`, `file`
+- Common CLI utilities: `gh` (GitHub CLI), `jq`/`yq`, `less`, `wget`, `sqlite3` (official tools zip, pinned to match the base image's bundled libsqlite3 — Debian's CLI mismatches `/usr/local/lib` and refuses to run), `git-lfs`, network diagnostics (`dig`/`nslookup`/`host`, `ss`/`ip`, `netstat`, `nc`, `traceroute`, `mtr`), `rsync`, `lsof`, `strace`, `zip`/`zstd`, `tree`, `file`
 - image-bundled Hermes companion skills for the office/document toolchain
 
 This repository reuses the same GitHub Actions build/publish pattern as `Keivry/hermes-matrix`, but targets Office document automation, image processing, document/PDF conversion, ClawMem-backed long-term agent memory, and RTK-optimized LLM token usage on terminal commands.

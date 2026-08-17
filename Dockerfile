@@ -23,6 +23,13 @@ ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 ARG GH_VERSION=v2.97.0
 ARG GH_ASSET=gh_2.97.0_linux_amd64.tar.gz
 ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH_ASSET}
+# Official sqlite3 CLI matching the base image's bundled libsqlite3 3.53.4 in
+# /usr/local/lib. Debian's /usr/bin/sqlite3 (compiled against 3.46.1) resolves
+# /usr/local/lib first via ld.so.conf.d and refuses to run with "header and
+# source version mismatch". Pin the matching tools zip under /usr/local/bin.
+ARG SQLITE_VERSION=3530400
+ARG SQLITE_ASSET_URL=https://www.sqlite.org/2026/sqlite-tools-linux-x64-${SQLITE_VERSION}.zip
+ARG SQLITE_ASSET_SHA256=7a6f4d1720e4bc13faa3d934bfce37b816a496c0a2480deacd64cfd8be6cf224
 
 LABEL org.opencontainers.image.title="hermes-office"
 LABEL org.opencontainers.image.description="Hermes Agent image bundled with OfficeCLI, PPT Master, ImageMagick, Docling, pdfcpu, qpdf, poppler-utils, Bun, ClawMem, RTK, and common CLI utilities (gh, jq, less, ...)"
@@ -101,6 +108,15 @@ RUN curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/$
     && install -m 0755 /tmp/rtk /usr/local/bin/rtk \
     && rm -rf /tmp/rtk.tar.gz /tmp/rtk \
     && rtk --version
+
+# Replace the broken Debian sqlite3 CLI with the official 3.53.4 tools zip so
+# the CLI version matches the /usr/local/lib libsqlite3 the base image ships.
+RUN curl -fsSL "${SQLITE_ASSET_URL}" -o /tmp/sqlite-tools.zip \
+    && echo "${SQLITE_ASSET_SHA256}  /tmp/sqlite-tools.zip" | sha256sum -c - \
+    && unzip -q /tmp/sqlite-tools.zip -d /tmp/sqlite-tools \
+    && install -m 0755 /tmp/sqlite-tools/sqlite3 /usr/local/bin/sqlite3 \
+    && rm -rf /tmp/sqlite-tools.zip /tmp/sqlite-tools \
+    && sqlite3 --version
 
 RUN npm install -g --unsafe-perm --no-fund --no-audit "clawmem@${CLAWMEM_VERSION}" \
     && node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)'
