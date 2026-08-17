@@ -29,7 +29,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
 - `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
-- Current pinned version in `Dockerfile`: `v4.7.0`
+- Current pinned version in `Dockerfile`: `v4.8.0`
 
 ### ImageMagick
 - Installed from the distro package as `imagemagick`
@@ -38,10 +38,10 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.119.0`
+- Current pinned version in `Dockerfile`: `2.120.1`
 - Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.13.0+cpu` and `torchvision==0.28.0+cpu`
-  2. install `docling==2.119.0` from the normal Python package index
+  2. install `docling==2.120.1` from the normal Python package index
 - The upstream Hermes base image keeps `[tool.uv] exclude-newer = "14 days"` in `/opt/hermes/pyproject.toml`; the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs
 - Current image installs the base `docling` package (not the optional VLM extras)
 

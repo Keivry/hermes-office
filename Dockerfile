@@ -1,4 +1,4 @@
-ARG HERMES_AGENT_VERSION=v2026.8.13
+ARG HERMES_AGENT_VERSION=v2026.8.16
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
@@ -6,9 +6,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG OFFICECLI_VERSION=v1.0.144
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
-ARG PPT_MASTER_VERSION=v4.7.0
+ARG PPT_MASTER_VERSION=v4.8.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.119.0
+ARG DOCLING_VERSION=2.120.1
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=3fbf9c9d1f3c10c2d59d04aca426dee9ccc6ceb32d255c61e93acc3b4f75fae6
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.28.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=c6373ec4c2f922e89f45ac91889404d312ba29a31f205b0ad9a725a3894ca246
 ARG PDFCPU_VERSION=0.15.0
@@ -128,6 +128,9 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # Each .patch is applied in lexicographic order against /opt/hermes; a failing
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
+# As of v2026.8.16: 009/010 (empty tool_calls dedup + wire boundary), 012
+# (gateway stderr timestamps) and 013 (update_cmd SyntaxWarning) merged
+# upstream — dropped. Remaining 6 still needed:
 # 004 = environment-specific (NOT upstream): narrow the #62151 direct_api_call
 #   workaround to openrouter/nous only — custom providers (e.g. deepseek)
 #   must keep streaming to avoid ServerDisconnectedError behind proxies
@@ -141,29 +144,12 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   PR tests/website hunks excluded (not shipped in the production image —
 #   including them makes `patch` fail and abort the build). Keep until #44347
 #   merges upstream; then drop and bump HERMES_AGENT_VERSION.
-# 009 = upstream #64335/#83203/#83312 (open): sanitize_api_messages dedup pass
-#   can collapse a repeated tool_call_id turn into tool_calls: [] which strict
-#   providers (DeepSeek, opencode-go) reject with HTTP 400, permanently wedging
-#   the session. Drop the key instead of rewriting an empty array (same fix as
-#   PRs #64345/#86020/#83622 — all open/duplicate-labeled upstream). Keep until
-#   upstream merges any of them.
-# 010 = upstream #83312 (open): defense-in-depth at the ChatCompletions wire
-#   boundary — strip tool_calls: [] on assistant messages right before send,
-#   catching paths that re-introduce the key after the sanitizer (PRs #83600/
-#   #72591, both open). Keep until upstream merges.
 # 011 = upstream #85207 (open): gateway restart mid-turn can spawn TWO parallel
 #   conversation loops on one session (detached restart overlap), duplicating
 #   the whole history and delivering divergent finals. Durable active-turn
 #   marker now records the owning gateway PID; boot recovery/auto-resume refuse
 #   to start a second loop while the owner is alive (PR #85285, open). Keep
 #   until #85285 merges upstream.
-# 012 = upstream #58674 (open): gateway stderr handler has no timestamp —
-#   docker logs / gateway.error.log lines cannot be dated. Add %(asctime)s to
-#   the stderr formatter (PR #59137, open; #59132 closed as superseded). Keep
-#   until #59137 merges upstream.
-# 013 = local-only (no upstream issue): hermes_cli/update_cmd.py:2564 docstring
-#   has invalid escape '\S' → SyntaxWarning on every import under Python 3.12+.
-#   Escape as '\\S'. No upstream tracking needed; drop when upstream fixes it.
 # 014 = upstream #82816/#85713 (open): title_generator unconditionally sent
 #   OpenAI-only response_format json_schema strict → Console Go / DeepSeek /
 #   Anthropic all 400 ("This response_format type is unavailable now") on every
@@ -196,12 +182,12 @@ COPY docker/cont-init.d/ /etc/cont-init.d/
 USER root
 
 # Create venvs as root — chown back to hermes so runtime access works.
-# NOTE 1: uv 0.11+ in base v2026.8.13 defaults to downloading CPython 3.11 when
+# NOTE 1: uv 0.11+ in base v2026.8.16 defaults to downloading CPython 3.11 when
 #         no --python is given, which breaks the cp313 torch wheels. Pin 3.13.
-# NOTE 2: base v2026.8.13 sets [tool.uv] exclude-newer = "14 days" in
+# NOTE 2: base v2026.8.16 sets [tool.uv] exclude-newer = "14 days" in
 #         /opt/hermes/pyproject.toml. Since the Dockerfile inherits WORKDIR
 #         /opt/hermes, uv resolves that config and refuses packages published
-#         in the last 14 days (e.g. docling 2.119.0). Run from /tmp to bypass.
+#         in the last 14 days (e.g. docling 2.120.1). Run from /tmp to bypass.
 RUN cd /tmp \
     && uv venv --python 3.13 /opt/tools/ppt-master/.venv \
     && uv pip install --python /opt/tools/ppt-master/.venv/bin/python --no-cache-dir -r /opt/tools/ppt-master/requirements.txt \
