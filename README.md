@@ -38,10 +38,10 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.120.2`
+- Current pinned version in `Dockerfile`: `2.120.3`
 - Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.13.0+cpu` and `torchvision==0.28.0+cpu`
-  2. install `docling==2.120.2` from the normal Python package index
+  2. install `docling==2.120.3` from the normal Python package index
 - The upstream Hermes base image keeps `[tool.uv] exclude-newer = "14 days"` in `/opt/hermes/pyproject.toml`; the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs
 - Current image installs the base `docling` package (not the optional VLM extras)
 
@@ -65,7 +65,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 
 ### ClawMem
 - Installed globally as `clawmem` at `/usr/local/bin/clawmem`
-- Current pinned version in `Dockerfile`: `0.36.0`
+- Current pinned version in `Dockerfile`: `0.37.0`
 - The Hermes memory provider plugin is staged under `/opt/tools/clawmem-plugin`
 - On container start, the s6 cont-init.d hook syncs that plugin into `$HERMES_HOME/plugins/clawmem`
 - The image defaults to **external-model / remote-GPU** style operation:
