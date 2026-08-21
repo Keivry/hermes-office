@@ -1,0 +1,65 @@
+diff --git a/tools/checkpoint_manager.py b/tools/checkpoint_manager.py
+index d66a1d0c..e5f4a1b2 100644
+--- a/tools/checkpoint_manager.py
++++ b/tools/checkpoint_manager.py
+@@ -377,6 +377,17 @@
+         logger.error("Git command skipped: %s (%s)", " ".join(["git"] + list(args)), msg)
+         return False, "", msg
+ 
++    # Bare-store self-heal: `git gc --prune=now` on a bare repo with only
++    # packed refs can delete the empty refs/heads/ (and branches/) dirs.
++    # Git 2.34+ then reports `fatal: not a git repository` for every
++    # subsequent command until the dirs are recreated. This was observed
++    # in the wild as `git add -A` spamming ERROR after each auto-prune
++    # (see #65349, #79334, #83036 and the local 015 fix for #78888).
++    # The repair is a cheap mkdir-if-missing, so run it proactively
++    # before every git invocation when the store already exists.
++    if (store / "HEAD").exists():
++        _repair_bare_repo_dirs(store)
++
+     env = _git_env(store, str(normalized_working_dir), index_file=index_file)
+     cmd = ["git"] + list(args)
+     allowed_returncodes = allowed_returncodes or set()
+@@ -398,6 +409,34 @@
+         ok = result.returncode == 0
+         stdout = result.stdout.strip()
+         stderr = result.stderr.strip()
++        if not ok and "not a git repository" in stderr and (store / "HEAD").exists():
++            # Self-heal once and retry: the store's refs/heads may have been
++            # removed by a concurrent or just-finished `git gc` (see above).
++            _repair_bare_repo_dirs(store)
++            try:
++                retry = subprocess.run(
++                    cmd,
++                    capture_output=True,
++                    text=True, encoding='utf-8', errors='replace',
++                    timeout=timeout,
++                    env=_git_env(store, str(normalized_working_dir), index_file=index_file),
++                    cwd=str(normalized_working_dir),
++                    stdin=subprocess.DEVNULL,
++                    creationflags=windows_hide_flags(),
++                )
++                ok = retry.returncode == 0
++                stdout = retry.stdout.strip()
++                stderr = retry.stderr.strip()
++                if ok:
++                    logger.debug("Git command healed after bare-repo repair: %s", " ".join(cmd))
++                elif retry.returncode not in allowed_returncodes:
++                    logger.error(
++                        "Git command failed: %s (rc=%d) stderr=%s",
++                        " ".join(cmd), retry.returncode, stderr,
++                    )
++                return ok, stdout, stderr
++            except Exception as exc2:  # pragma: no cover
++                logger.debug("Retry after bare-repo repair failed: %s", exc2)
+         if not ok and result.returncode not in allowed_returncodes:
+             logger.error(
+                 "Git command failed: %s (rc=%d) stderr=%s",
+@@ -509,6 +548,7 @@
+         _migrate_legacy_store(base)
+ 
+     if (store / "HEAD").exists():
++        _repair_bare_repo_dirs(store)
+         _ensure_store_excludes(store)
+         return None
+ 

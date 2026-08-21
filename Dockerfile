@@ -146,7 +146,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
 # As of v2026.8.18: 009/010 (empty tool_calls dedup + wire boundary), 012
 # (gateway stderr timestamps) and 013 (update_cmd SyntaxWarning) merged
-# upstream — dropped. Remaining 6 still needed:
+# upstream — dropped. Remaining 7 still needed:
 # 004 = environment-specific (NOT upstream): narrow the #62151 direct_api_call
 #   workaround to openrouter/nous only — custom providers (e.g. deepseek)
 #   must keep streaming to avoid ServerDisconnectedError behind proxies
@@ -179,6 +179,16 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   Adds the exclude + _ensure_store_excludes() so existing stores also pick it
 #   up. Trimmed to tools/checkpoint_manager.py (PR tests excluded). Keep until
 #   #78929/#78944 merge upstream.
+# 016 = fix(checkpoints): bare-repo self-heal for `fatal: not a git repository:
+#   '/.../checkpoints/store'` after `git gc --prune=now` deletes empty
+#   refs/heads/ & branches/ (bare repo with only packed-refs, Git 2.34+).
+#   Observed as `git add -A` spamming ERROR after every auto-prune (24h) —
+#   _repair_bare_repo_dirs() existed but was only called AFTER gc, never
+#   BEFORE the next checkpoint. This patch adds proactive repair before every
+#   git call (_run_git) + retry-on-fatal + early repair in _init_store.
+#   Refs: #65349 (concurrent gc), #79334/#79335 (size-cap loop), #83036
+#   (GC tmp packs/corruption), local 015/#78888. Keep until upstream merges
+#   the bare-repo-dir fix.
 COPY patches/ /tmp/hermes-patches/
 RUN set -eux; \
     if ls /tmp/hermes-patches/*.patch >/dev/null 2>&1; then \
