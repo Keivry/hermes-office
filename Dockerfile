@@ -1,4 +1,4 @@
-ARG HERMES_AGENT_VERSION=v2026.8.18
+ARG HERMES_AGENT_VERSION=v2026.8.19
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
@@ -8,20 +8,20 @@ ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
 ARG PPT_MASTER_VERSION=v4.8.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.120.3
+ARG DOCLING_VERSION=2.121.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=3fbf9c9d1f3c10c2d59d04aca426dee9ccc6ceb32d255c61e93acc3b4f75fae6
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.28.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=c6373ec4c2f922e89f45ac91889404d312ba29a31f205b0ad9a725a3894ca246
 ARG PDFCPU_VERSION=0.15.0
 ARG PDFCPU_ASSET_URL=https://github.com/pdfcpu/pdfcpu/releases/download/v${PDFCPU_VERSION}/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64.tar.xz
-ARG BUN_VERSION=1.3.14
+ARG BUN_VERSION=1.4.0
 ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
 ARG CLAWMEM_VERSION=0.37.0
 ARG RTK_VERSION=v0.45.0
 ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
-ARG GH_VERSION=v2.97.0
-ARG GH_ASSET=gh_2.97.0_linux_amd64.tar.gz
+ARG GH_VERSION=v2.98.0
+ARG GH_ASSET=gh_2.98.0_linux_amd64.tar.gz
 ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH_ASSET}
 # Official sqlite3 CLI matching the base image's bundled libsqlite3 3.53.4 in
 # /usr/local/lib. Debian's /usr/bin/sqlite3 (compiled against 3.46.1) resolves
@@ -144,7 +144,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # Each .patch is applied in lexicographic order against /opt/hermes; a failing
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
-# As of v2026.8.18: 009/010 (empty tool_calls dedup + wire boundary), 012
+# As of v2026.8.19: 009/010 (empty tool_calls dedup + wire boundary), 012
 # (gateway stderr timestamps) and 013 (update_cmd SyntaxWarning) merged
 # upstream — dropped. Remaining 7 still needed:
 # 004 = environment-specific (NOT upstream): narrow the #62151 direct_api_call
@@ -208,12 +208,12 @@ COPY docker/cont-init.d/ /etc/cont-init.d/
 USER root
 
 # Create venvs as root — chown back to hermes so runtime access works.
-# NOTE 1: uv 0.11+ in base v2026.8.18 defaults to downloading CPython 3.11 when
+# NOTE 1: uv 0.11+ in base v2026.8.19 defaults to downloading CPython 3.11 when
 #         no --python is given, which breaks the cp313 torch wheels. Pin 3.13.
-# NOTE 2: base v2026.8.18 sets [tool.uv] exclude-newer = "14 days" in
+# NOTE 2: base v2026.8.19 sets [tool.uv] exclude-newer = "14 days" in
 #         /opt/hermes/pyproject.toml. Since the Dockerfile inherits WORKDIR
 #         /opt/hermes, uv resolves that config and refuses packages published
-#         in the last 14 days (e.g. docling 2.120.3). Run from /tmp to bypass.
+#         in the last 14 days (e.g. docling 2.121.0). Run from /tmp to bypass.
 RUN cd /tmp \
     && uv venv --python 3.13 /opt/tools/ppt-master/.venv \
     && uv pip install --python /opt/tools/ppt-master/.venv/bin/python --no-cache-dir -r /opt/tools/ppt-master/requirements.txt \

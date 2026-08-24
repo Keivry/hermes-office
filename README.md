@@ -38,10 +38,10 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.120.3`
+- Current pinned version in `Dockerfile`: `2.121.0`
 - Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.13.0+cpu` and `torchvision==0.28.0+cpu`
-  2. install `docling==2.120.3` from the normal Python package index
+  2. install `docling==2.121.0` from the normal Python package index
 - The upstream Hermes base image keeps `[tool.uv] exclude-newer = "14 days"` in `/opt/hermes/pyproject.toml`; the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs
 - Current image installs the base `docling` package (not the optional VLM extras)
 
@@ -60,7 +60,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 
 ### Bun
 - Installed as a pinned standalone binary at `/usr/local/bin/bun`
-- Current pinned version in `Dockerfile`: `1.3.14`
+- Current pinned version in `Dockerfile`: `1.4.0`
 - Added because ClawMem requires Bun at runtime
 
 ### ClawMem
