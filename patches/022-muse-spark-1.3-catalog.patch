@@ -1,0 +1,84 @@
+# 022 = upstream PR #101948: Muse Spark 1.3 selectable everywhere.
+#   1M entries + stale-cache guard (agent/model_metadata.py), 1.3 SKUs in
+#   curated lists (hermes_cli/models.py), setup pool (hermes_cli/setup.py).
+#   Upstream contributors/tests/website hunks excluded. Applies clean to
+#   v2026.8.31 (+020/021) with offsets. Companions 020/021 cover enforcement
+#   + endpoint probing. Drop when base tag includes #101948.
+diff --git a/agent/model_metadata.py b/agent/model_metadata.py
+index 052e1a1e4ee1..152043e3b5e4 100644
+--- a/agent/model_metadata.py
++++ b/agent/model_metadata.py
+@@ -545,6 +545,13 @@ def _warn_context_length_fallback(model: str, base_url: str) -> None:
+     "deepseek": 128000,
+     # Meta
+     "llama": 131072,
++    # Muse Spark family (1.1/1.2/1.3 + contributor tiers) ships with a 1M
++    # context window: 1,048,576 per OpenRouter live metadata (verified
++    # 2026-09-02). The family key covers every checkpoint; live endpoint /
++    # models.dev metadata still wins when available. Substring match also
++    # covers -contributor and provider-prefixed ids (meta/...).
++    "muse-spark-1.3": 1_048_576,
++    "muse-spark": 1_048_576,
+     # Thinking Machines — Inkling family ships with a 1M context window
+     # (max output 256K).  Verified against OpenRouter live metadata
+     # (context_length 1,048,576 for inkling, inkling-small, and the
+@@ -2304,6 +2311,8 @@ def _model_name_suggests_minimax_m3(model: str) -> bool:
+ # catch-all can never be listed here.
+ _PRE_CATALOG_STALE_KEYS = frozenset({
+     "minimax-m3",    # 1M; older builds persisted the "minimax" catch-all (204,800)
++    "muse-spark-1.3",  # 1M; builds before this entry fell through to the 256K fallback
++    "muse-spark",      # 1M; 1.1/1.2 builds fell through to the 256K fallback
+     "grok-4.3",      # 1M; pre-2026-05-15 builds persisted the "grok-4" catch-all (256,000)
+     "grok-4.6",      # 500K; pre-catalog builds persisted the "grok-4" catch-all (256,000)
+     "grok-4-fast",   # 2M; pre-2026-04-10 builds fell through to the 256K probe fallback
+diff --git a/hermes_cli/models.py b/hermes_cli/models.py
+index 6d1a88e6aa0c..d792e9fbddbd 100644
+--- a/hermes_cli/models.py
++++ b/hermes_cli/models.py
+@@ -133,6 +133,9 @@ def _custom_provider_ssl_context(base_url: str):
+     ("nvidia/nemotron-3-super-120b-a12b",      ""),
+     # Meta
+     ("meta/muse-spark-1.2",                    ""),
++    ("meta/muse-spark-1.2-contributor",        ""),
++    ("meta/muse-spark-1.3",                    ""),
++    ("meta/muse-spark-1.3-contributor",        ""),
+     # Sakana
+     ("sakana/fugu-ultra",                      ""),
+     # OpenRouter routers
+@@ -576,6 +579,7 @@ def _xai_curated_models() -> list[str]:
+         "nemotron-3-ultra-free",
+         "nemotron-3.5-lightning-free",
+         "muse-spark-1.2-contributor-free",
++        "muse-spark-1.3-contributor-free",
+     ],
+     # OpenCode free tier — keyless (no OpenCode account needed). This is the
+     # OFFLINE FLOOR only: provider_model_ids("opencode-free") revalidates live
+@@ -596,6 +600,7 @@ def _xai_curated_models() -> list[str]:
+         "nemotron-3-ultra-free",
+         "nemotron-3.5-lightning-free",
+         "muse-spark-1.2-contributor-free",
++        "muse-spark-1.3-contributor-free",
+     ],
+     # Synced against https://opencode.ai/docs/go/ + live GET /zen/go/v1/models
+     # (2026-08-20).
+@@ -628,6 +633,7 @@ def _xai_curated_models() -> list[str]:
+         "hy3",
+         "hy3-preview",
+         "muse-spark-1.2-contributor",
++        "muse-spark-1.3-contributor",
+         # Go-subscription twin of the Zen keyless Ox Alpha (live go/v1
+         # catalog 2026-08-21; NOT keyless — Go relay requires a Go key).
+         "ox-alpha-free",
+diff --git a/hermes_cli/setup.py b/hermes_cli/setup.py
+index 1213eb115820..ef67b24d981e 100644
+--- a/hermes_cli/setup.py
++++ b/hermes_cli/setup.py
+@@ -112,7 +112,7 @@ def _supports_same_provider_pool_setup(provider: str) -> bool:
+     "ai-gateway": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5", "google/gemini-3-flash"],
+     "kilocode": ["anthropic/claude-sonnet-5", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5.4", "google/gemini-3-pro-preview", "google/gemini-3-flash-preview"],
+     "opencode-zen": ["x-preview-f-free", "gpt-5.6-sol", "gpt-5.4", "gpt-5.3-codex", "claude-opus-5", "claude-sonnet-5", "gemini-3.7-flash", "glm-5.2", "kimi-k3", "minimax-m3"],
+-    "opencode-free": ["deepseek-v4-flash-free", "hy3-free", "mimo-v2.5-free", "laguna-s-2.1-free", "nemotron-3-ultra-free", "nemotron-3.5-lightning-free", "muse-spark-1.2-contributor-free"],
++    "opencode-free": ["deepseek-v4-flash-free", "hy3-free", "mimo-v2.5-free", "laguna-s-2.1-free", "nemotron-3-ultra-free", "nemotron-3.5-lightning-free", "muse-spark-1.2-contributor-free", "muse-spark-1.3-contributor-free"],
+     "opencode-go": ["kimi-k3", "kimi-k2.7-code", "kimi-k2.6", "gpt-5.6-luna", "grok-4.5", "glm-5.3", "glm-5.3-flash", "glm-5.2", "mimo-v2.5-pro", "mimo-v2.5", "minimax-m3", "minimax-m2.7", "qwen3.8-max", "qwen3.7-max", "deepseek-v4-pro", "hy3"],
+     "huggingface": [
+         "Qwen/Qwen3.5-397B-A17B", "Qwen/Qwen3-235B-A22B-Thinking-2507",
