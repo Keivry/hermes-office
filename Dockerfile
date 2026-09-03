@@ -146,8 +146,10 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
 # As of v2026.8.31: 009/010 (empty tool_calls dedup + wire boundary), 012
 # (gateway stderr timestamps) and 013 (update_cmd SyntaxWarning) merged
-# upstream — dropped. Remaining 9 still needed (017 vendors post-tag
-# upstream PR #101864; 018 is hermes-office specific):
+# upstream — dropped. Remaining 21 still needed (017 vendors post-tag
+# upstream PR #101864; 018 is hermes-office specific; 019-030 vendor post-tag
+# upstream PRs #100972/#101968/#101949/#101948/#101499/#100909/#101118/
+# #100746/#101483/#100967/#100979/#100135):
 # 004 = environment-specific (NOT upstream): narrow the #62151 direct_api_call
 #   workaround to openrouter/nous only — custom providers (e.g. deepseek)
 #   must keep streaming to avoid ServerDisconnectedError behind proxies
@@ -189,9 +191,12 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   git call (_run_git) + retry-on-fatal + early repair in _init_store.
 #   Refs: #65349 (concurrent gc), #79334/#79335 (size-cap loop), #83036
 #   (GC tmp packs/corruption), local 015/#78888. Keep until upstream merges
-#   the bare-repo-dir fix. Verified 2026-09-03: all 9 apply cleanly against
+#   the bare-repo-dir fix. Verified 2026-09-03: all 21 apply cleanly against
 #   v2026.8.31 in lexicographic order (016's hunk 3 depends on 015 having
-#   been applied first, 018 depends on 017 — do NOT dry-run 016/018 standalone).
+#   been applied first, 018 depends on 017, 025 stacks on 019's shutdown
+#   region, 030 stacks on 028 in agent_init.py — do NOT dry-run 016/018/025/
+#   026/030 standalone). 025 hunk 2 + 026 hunk 2 are adapted to the tag (see
+#   their headers); all other hunks apply verbatim with offsets.
 # 017 = upstream PR #101864 (merged to main after v2026.8.31, in no tag yet):
 #   x-opencode-session affinity header on every OpenCode request (main turn
 #   on all transports + auxiliary calls). Vendored trimmed to runtime files
@@ -206,6 +211,47 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   the family check (opencode -> opencode-zen via existing alias). Main
 #   turn uses agent.requested_provider, aux uses the turn-context record.
 #   Revisit if upstream covers custom providers behind proxies.
+# 019 = upstream PR #100972 (fixes #99882, merged to main after v2026.8.31):
+#   FIFO overflow orphan rescue + shutdown flush of the overflow tail
+#   (gateway/run.py + gateway/shutdown_flush.py). Drop when base tag
+#   includes #100972.
+# 020 = upstream PR #101968: Muse Spark tool-use enforcement — add "muse" to
+#   TOOL_USE_ENFORCEMENT_MODELS + EXECUTION_GUIDANCE_MODELS
+#   (agent/prompt_builder.py); without it Muse Spark answers in prose with 0
+#   tool calls on defaults (#96550). Drop when base tag includes #101968.
+# 021 = upstream PR #101949: Muse Spark 1M context — static "muse-spark" entry
+#   + commandcode live /models probe (agent/model_metadata.py) + opencode-free
+#   models.dev alias (agent/models_dev.py). Drop when tag includes #101949.
+# 022 = upstream PR #101948: Muse Spark 1.3 selectable everywhere — 1M entries
+#   + stale-cache guard (model_metadata.py), 1.3 SKUs in curated lists
+#   (hermes_cli/models.py) + setup pool (hermes_cli/setup.py). Companions
+#   020/021. Drop when base tag includes #101948.
+# 023 = upstream PR #101499 (SECURITY): /goal gate add (shell=True at every
+#   goal turn, no approval) now requires an explicitly-configured gateway
+#   admin (gateway/slash_commands.py). Drop when tag includes #101499.
+# 024 = upstream PR #100909: Matrix password-auth (no token) counts as a
+#   credential for the reconnect queue (gateway/run.py); no-op for token
+#   setups. Drop when base tag includes #100909.
+# 025 = upstream PR #101118: quiesce the gateway thread pool BEFORE closing
+#   SessionDBs at shutdown (gateway/run.py) — avoids the post-close late-write
+#   corruption (#101093/#101064). ADAPTED: upstream's shared-DB final sweep
+#   (absent in this tag) omitted; stacks on 019. Drop when tag has #101118.
+# 026 = upstream PR #100746: provider-overflow recovery stays armed across the
+#   post-compaction rebuild; fails closed instead of silently truncating
+#   (agent/conversation_loop.py). ADAPTED: init-site hunk re-anchored to the
+#   tag. Companion to 019. Drop when base tag includes #100746.
+# 027 = upstream PR #101483 (SECURITY, GHSA GitSpawn RCE): sanitize the git
+#   process env for every spawned git (GIT_CONFIG_NOSYSTEM=1, drop ambient
+#   GIT_CONFIG_COUNT/-c). Drop when base tag includes #101483.
+# 028 = upstream PR #100967: tool-call loop guardrails halt runaway
+#   identical-call/result streaks (saves tokens on long sessions). Drop when
+#   base tag includes #100967.
+# 029 = upstream PR #100979: validate deferred-tool args against the schema
+#   (previously bypassed). Drop when base tag includes #100979.
+# 030 = upstream PR #100135 (fixes #17929): try the user-configured fallback
+#   chain before failing fast with no credentials; no-op without
+#   fallback_model. Stacks on 028 (same file, different region). Drop when
+#   base tag includes #100135.
 COPY patches/ /tmp/hermes-patches/
 RUN set -eux; \
     if ls /tmp/hermes-patches/*.patch >/dev/null 2>&1; then \
