@@ -4,7 +4,13 @@
 #   Vendored trimmed to runtime files only: agent/opencode_affinity.py (new),
 #   agent/chat_completion_helpers.py (rename+wrap, adapted to the v2026.8.31
 #   function head), agent/auxiliary_client.py (extra_headers forwarding +
-#   merge). Upstream tests/website hunks excluded (not shipped in the image).
+#   merge), agent/portal_tags.py (affinity-scope ContextVar + get/set/reset —
+#   upstream ships it in the same PR; DO NOT TRIM IT AGAIN: without it
+#   opencode_affinity's `from agent.portal_tags import get_affinity_scope`
+#   raises ImportError on this tag, the bare `except` swallows it, the key
+#   degrades to "explicit session_id only", and every context-less aux thread
+#   (title generation -> relay 400 MissingSessionID) loses the header).
+#   Upstream tests/website hunks excluded (not shipped in the image).
 #   Drop when HERMES_AGENT_VERSION moves past the tag that includes #101864.
 #   NOTE: 018 extends the files 017 creates — always apply in order.
 diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
@@ -175,3 +181,54 @@ index 000000000000..4f0cc5522e40
 +            merged.setdefault(key, value)
 +        kwargs["extra_headers"] = merged
 +    return kwargs
+diff --git a/agent/portal_tags.py b/agent/portal_tags.py
+index ecfecdc6c57a..b4d79ffa303a 100644
+--- a/agent/portal_tags.py
++++ b/agent/portal_tags.py
+@@ -54,6 +54,46 @@
+ _conversation_id: ContextVar[Optional[str]] = ContextVar(
+     "nous_portal_conversation_id", default=None
+ )
++
++
++# ── Ambient affinity/routing scope ───────────────────────────────────────────
++#
++# The routing key a provider uses to pin a conversation to one backend / prompt
++# cache: OpenRouter's sticky ``session_id``, Nous Portal's sticky key, xAI's
++# ``x-grok-conv-id``, the OpenCode relay's ``x-opencode-session``. Usually equal
++# to the conversation id; a host that mints one physical session per RESPONSE
++# publishes the key it declared for the whole chat here instead. Only that
++# declared value is published — unset means consumers fall back to the
++# conversation id, so delegate trees keep sharing their parent's sticky key.
++#
++# Shipped by upstream PR #101864 next to ``_conversation_id``; the hermes-office
++# vendored 017 hunk originally dropped it, which made
++# ``agent/opencode_affinity.py``'s ``get_affinity_scope`` import fail on
++# v2026.8.31 and silently disabled ``x-opencode-session`` on every thread with
++# no explicit session id (title generation -> relay 400 MissingSessionID).
++_affinity_scope: ContextVar[Optional[str]] = ContextVar(
++    "hermes_affinity_scope", default=None
++)
++
++
++def set_affinity_scope(scope: Optional[str]):
++    """Publish the declared routing/affinity scope; returns the ContextVar token."""
++    return _affinity_scope.set(scope or None)
++
++
++def reset_affinity_scope(token) -> None:
++    """Restore the previous affinity scope (pair with ``set_affinity_scope``)."""
++    try:
++        _affinity_scope.reset(token)
++    except Exception:
++        # Token from another Context (e.g. reset on a different thread) —
++        # fall back to clearing rather than raising in cleanup paths.
++        _affinity_scope.set(None)
++
++
++def get_affinity_scope() -> Optional[str]:
++    """Return the declared affinity scope, or ``None`` when unset."""
++    return _affinity_scope.get()
+ 
+ 
+ def set_conversation_context(conversation_id: Optional[str]):

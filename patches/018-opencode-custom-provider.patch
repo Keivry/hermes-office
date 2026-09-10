@@ -9,23 +9,47 @@
 #   the host is not opencode.ai. The original identity survives in
 #   agent.requested_provider ("custom:opencode") on the main turn and in
 #   auxiliary_client's _RUNTIME_MAIN_CONTEXT["requested_provider"] for aux
-#   calls (set by agent/turn_context.py) — thread it through and strip the
-#   "custom:" prefix before the family check. opencode_provider_family
-#   already maps the bare name ("opencode" -> "opencode-zen" via alias,
-#   "opencode-go-bridge" via prefix), so no new naming semantics are added.
+#   calls (set by agent/turn_context.py) — thread it through and match the
+#   name against the whole `opencode` / `opencode-*` namespace (helper
+#   _is_opencode_custom_name) after stripping any `custom:` prefix.
+#   Rationale: opencode_provider_family is a built-in-family allowlist
+#   (opencode / opencode-zen* / opencode-go* / opencode-free*), but locally
+#   `custom:opencode-chat` and friends front the same relay — so the
+#   namespace, not a per-name list, is the matcher. The family check still
+#   runs first: hermes_cli.models stays the single owner of the canonical
+#   families.
 #
 #   DEPENDS ON 017 (extends agent/opencode_affinity.py which 017 creates,
 #   and the two merge call sites 017 adds). Always apply patches in
 #   lexicographic order; do NOT dry-run 018 standalone (same sequential
 #   dependency pattern as 015 -> 016).
 diff --git a/agent/opencode_affinity.py b/agent/opencode_affinity.py
+index 4f0cc5522e40..2108e65d0686 100644
 --- a/agent/opencode_affinity.py
 +++ b/agent/opencode_affinity.py
-@@ -22,17 +22,34 @@
+@@ -22,17 +22,58 @@
  OPENCODE_SESSION_HEADER = "x-opencode-session"
  
  
 -def is_opencode_target(provider: Optional[str], base_url: Optional[str]) -> bool:
++def _is_opencode_custom_name(provider: Optional[str]) -> bool:
++    """True for a name in the ``opencode`` / ``opencode-*`` provider namespace.
++
++    hermes-office 018: a named custom provider fronting the relay
++    (``custom:opencode``, ``custom:opencode-chat``, ``custom:opencode-go-x``,
++    ...) is flattened to provider ``"custom"`` at runtime, and
++    :func:`opencode_provider_family` from ``hermes_cli.models`` only knows the
++    built-in families (``opencode`` / ``opencode-zen*`` / ``opencode-go*`` /
++    ``opencode-free*``). Everything else in the namespace is matched here, so
++    the whole namespace shares one rule instead of a per-name allowlist. Any
++    vendor prefix (``custom:``) is stripped first.
++    """
++    name = str(provider or "").strip().lower()
++    if ":" in name:
++        name = name.split(":", 1)[1]
++    return name == "opencode" or name.startswith("opencode-")
++
++
 +def is_opencode_target(
 +    provider: Optional[str],
 +    base_url: Optional[str],
@@ -40,8 +64,14 @@ diff --git a/agent/opencode_affinity.py b/agent/opencode_affinity.py
 +    (e.g. ``custom:opencode`` -> proxy IP). The runtime flattens those to
 +    provider ``"custom"`` with a proxy base_url, so both upstream signals
 +    miss; the pre-canonicalization identity in *requested_provider* is
-+    checked with any ``custom:`` prefix stripped.
++    checked, with any ``custom:`` prefix stripped, against the
++    ``opencode`` / ``opencode-*`` namespace.
      """
++    # hermes-office 018: named custom providers in the opencode namespace.
++    if _is_opencode_custom_name(provider) or _is_opencode_custom_name(
++        requested_provider
++    ):
++        return True
      try:
          from hermes_cli.models import opencode_provider_family
  
@@ -57,7 +87,7 @@ diff --git a/agent/opencode_affinity.py b/agent/opencode_affinity.py
      except Exception:
          pass
      try:
-@@ -47,9 +64,10 @@
+@@ -47,9 +88,10 @@
      provider: Optional[str],
      base_url: Optional[str],
      session_id: Optional[str] = None,
@@ -69,7 +99,7 @@ diff --git a/agent/opencode_affinity.py b/agent/opencode_affinity.py
          return {}
      try:
          from agent.portal_tags import get_affinity_scope, get_conversation_context
-@@ -68,13 +86,14 @@
+@@ -68,13 +110,16 @@
      provider: Optional[str],
      base_url: Optional[str],
      session_id: Optional[str] = None,
@@ -81,7 +111,9 @@ diff --git a/agent/opencode_affinity.py b/agent/opencode_affinity.py
      Non-OpenCode targets are left untouched.
      """
 -    headers = opencode_session_headers(provider, base_url, session_id)
-+    headers = opencode_session_headers(provider, base_url, session_id, requested_provider)
++    headers = opencode_session_headers(
++        provider, base_url, session_id, requested_provider
++    )
      if headers:
          existing = kwargs.get("extra_headers")
          merged = dict(existing) if isinstance(existing, dict) else {}

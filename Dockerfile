@@ -197,20 +197,37 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   region, 030 stacks on 028 in agent_init.py — do NOT dry-run 016/018/025/
 #   026/030 standalone). 025 hunk 2 + 026 hunk 2 are adapted to the tag (see
 #   their headers); all other hunks apply verbatim with offsets.
+#   2026-09-10: 017 gained the portal_tags.py affinity-scope hunk and 018 the
+#   opencode-namespace rule (see their headers). Re-verified against the
+#   pre-017 state of v2026.8.31: both apply with zero fuzz/rejects and leave
+#   agent/auxiliary_client.py + agent/chat_completion_helpers.py
+#   byte-identical to the shipped tree (only portal_tags.py and
+#   opencode_affinity.py move).
 # 017 = upstream PR #101864 (merged to main after v2026.8.31, in no tag yet):
 #   x-opencode-session affinity header on every OpenCode request (main turn
 #   on all transports + auxiliary calls). Vendored trimmed to runtime files
 #   (new agent/opencode_affinity.py + chat_completion_helpers rename+wrap
-#   adapted to the tag's function head + auxiliary_client forwarding);
-#   upstream tests/website hunks excluded (not shipped in the image). Drop
-#   when the base tag includes #101864.
+#   adapted to the tag's function head + auxiliary_client forwarding +
+#   portal_tags affinity scope). The portal_tags.py hunk (affinity-scope
+#   ContextVar + get/set/reset) was dropped in the first trim and MUST stay:
+#   without it opencode_affinity's get_affinity_scope import raises on this
+#   tag, the bare except swallows it, and every context-less aux thread
+#   (title generation) loses the header -> relay 400 MissingSessionID.
+#   Upstream tests/website hunks excluded (not shipped in the image).
+#   Drop when the base tag includes #101864.
 # 018 = hermes-office specific (NOT upstream): named custom providers
 #   fronting the relay (custom:opencode -> proxy IP) flatten to provider
 #   "custom" at runtime, so 017's target check misses on both signals;
-#   thread requested_provider through and strip the custom: prefix before
-#   the family check (opencode -> opencode-zen via existing alias). Main
-#   turn uses agent.requested_provider, aux uses the turn-context record.
-#   Revisit if upstream covers custom providers behind proxies.
+#   thread requested_provider through and match the name against the whole
+#   `opencode` / `opencode-*` namespace after stripping the `custom:`
+#   prefix (_is_opencode_custom_name). The namespace rule is deliberate:
+#   opencode_provider_family is a built-in-family allowlist
+#   (opencode/opencode-zen*/opencode-go*/opencode-free*) and locally
+#   `custom:opencode-chat` fronts the same relay too. Family check still
+#   runs first — hermes_cli.models stays the single owner of the canonical
+#   families. Main turn uses agent.requested_provider, aux uses the
+#   turn-context record. Revisit if upstream covers custom providers
+#   behind proxies.
 # 019 = upstream PR #100972 (fixes #99882, merged to main after v2026.8.31):
 #   FIFO overflow orphan rescue + shutdown flush of the overflow tail
 #   (gateway/run.py + gateway/shutdown_flush.py). Drop when base tag
