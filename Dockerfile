@@ -1,27 +1,27 @@
-ARG HERMES_AGENT_VERSION=v2026.8.31
+ARG HERMES_AGENT_VERSION=v2026.9.11
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.147
+ARG OFFICECLI_VERSION=v1.0.149
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
-ARG PPT_MASTER_VERSION=v6.2.0
+ARG PPT_MASTER_VERSION=v6.4.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.124.0
+ARG DOCLING_VERSION=2.126.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=3fbf9c9d1f3c10c2d59d04aca426dee9ccc6ceb32d255c61e93acc3b4f75fae6
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.28.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=c6373ec4c2f922e89f45ac91889404d312ba29a31f205b0ad9a725a3894ca246
 ARG PDFCPU_VERSION=0.15.0
 ARG PDFCPU_ASSET_URL=https://github.com/pdfcpu/pdfcpu/releases/download/v${PDFCPU_VERSION}/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64.tar.xz
-ARG BUN_VERSION=1.4.0
+ARG BUN_VERSION=1.4.2
 ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
 ARG CLAWMEM_VERSION=0.37.0
-ARG RTK_VERSION=v0.47.0
+ARG RTK_VERSION=v0.49.0
 ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
-ARG GH_VERSION=v2.99.0
-ARG GH_ASSET=gh_2.99.0_linux_amd64.tar.gz
+ARG GH_VERSION=v2.100.0
+ARG GH_ASSET=gh_2.100.0_linux_amd64.tar.gz
 ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH_ASSET}
 # Official sqlite3 CLI matching the base image's bundled libsqlite3 3.53.4 in
 # /usr/local/lib. Debian's /usr/bin/sqlite3 (compiled against 3.46.1) resolves
@@ -144,25 +144,48 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # Each .patch is applied in lexicographic order against /opt/hermes; a failing
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
-# As of v2026.8.31: 009/010 (empty tool_calls dedup + wire boundary), 012
-# (gateway stderr timestamps) and 013 (update_cmd SyntaxWarning) merged
-# upstream — dropped. Remaining 21 still needed (017 vendors post-tag
-# upstream PR #101864; 018 is hermes-office specific; 019-030 vendor post-tag
-# upstream PRs #100972/#101968/#101949/#101948/#101499/#100909/#101118/
-# #100746/#101483/#100967/#100979/#100135):
+#
+# As of v2026.9.11 (v0.21.2) the roster is 8 patches. 17 were retired:
+# 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
+# timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the
+# rest were retired on this bump after every one of their upstream merge
+# commits was verified an ancestor of v2026.9.11 (gh api
+# compare/v2026.9.11...<mergeCommit> == "behind"):
+#   017 #101864 opencode-session-affinity | 019 #100972 FIFO overflow rescue |
+#   020 #101968 muse-spark tool-use enforcement | 021 #101949 muse-spark 1M
+#   context | 022 #101948 muse-spark 1.3 catalog | 023 #101499 /goal admin
+#   gate | 024 #100909 Matrix password credential | 025 #101118 shutdown
+#   quiesce | 026 #100746 provider-overflow recovery | 027 #101483 GitSpawn
+#   RCE | 028 #100967 tool-loop guardrails | 029 #100979 tool-search
+#   validation | 030 #100135 init fallback chain.
+# NOTE: 020-022 were the Muse Spark vendors. They are dropped because upstream
+# now carries them, NOT because this deployment stopped using muse-spark — the
+# two reasons happen to coincide.
+#
+# All 8 survivors were re-anchored against v2026.9.11 on 2026-09-14 and verified
+# by a real `patch -p1` apply in lexicographic order on a pristine checkout
+# (rc=0, zero .rej/.orig, resulting files byte-identical to the authored tree).
+# Upstream's codebase decomposition relocated several targets — pre-2026-09-14
+# anchors do NOT apply:
+#   007 -> tools/send_message_senders.py (send_message_tool.py was split into
+#          send_message_tool/targets/senders)
+#   008 -> hermes_cli/setup_quick.py (moved out of hermes_cli/setup.py)
+#   011 -> gateway/session.py + session_lifecycle.py + run_startup.py (session
+#          decomposition; turn-marker logic now lives in session_lifecycle)
+#   018 -> rebased onto upstream's rewritten agent/opencode_affinity.py
 # 004 = environment-specific (NOT upstream): narrow the #62151 direct_api_call
 #   workaround to openrouter/nous only — custom providers (e.g. deepseek)
 #   must keep streaming to avoid ServerDisconnectedError behind proxies
 #   (#71268). Keep — upstream still forces all cron/delegation inline.
-# 007 = upstream #77100 (open): Matrix adapter loop-mismatch bridge — keep
-#   until #77100 merges upstream.
+# 007 = upstream #77100 (CLOSED, not merged): Matrix adapter loop-mismatch
+#   bridge — keep until #77100 merges upstream.
 # 008 = upstream #44347 (open): file_read toolset (read-only subset of file:
 #   read_file + search_files, NO write/patch) — sandboxed read-only agents
 #   (skill-audit) can inspect files without a write path. Trimmed to the 3
-#   runtime files (toolsets.py / hermes_cli/setup.py / hermes_cli/tools_config.py);
-#   PR tests/website hunks excluded (not shipped in the production image —
-#   including them makes `patch` fail and abort the build). Keep until #44347
-#   merges upstream; then drop and bump HERMES_AGENT_VERSION.
+#   runtime files (toolsets.py / hermes_cli/setup_quick.py /
+#   hermes_cli/tools_config.py); PR tests/website hunks excluded (not shipped
+#   in the production image — including them makes `patch` fail and abort the
+#   build). Keep until #44347 merges upstream.
 # 011 = upstream #85207 (open): gateway restart mid-turn can spawn TWO parallel
 #   conversation loops on one session (detached restart overlap), duplicating
 #   the whole history and delivering divergent finals. Durable active-turn
@@ -170,10 +193,10 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   to start a second loop while the owner is alive (PR #85285, open). Keep
 #   until #85285 merges upstream.
 # 014 = upstream #82816/#85713 (open): title_generator unconditionally sent
-#   OpenAI-only response_format json_schema strict → Console Go / DeepSeek /
+#   OpenAI-only response_format json_schema strict -> Console Go / DeepSeek /
 #   Anthropic all 400 ("This response_format type is unavailable now") on every
 #   fresh session. This patch drops response_format entirely; _extract_title_text
-#   already falls back through JSON-dict → loose regex → prose+think-strip, so
+#   already falls back through JSON-dict -> loose regex -> prose+think-strip, so
 #   titles still work. Keep until #85713 (retry-cascade) merges upstream.
 # 015 = upstream #78888 (open): checkpoint_manager DEFAULT_EXCLUDES missing
 #   node-compile-cache/ — the desktop/TUI launcher writes this cache (can be
@@ -191,84 +214,18 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   git call (_run_git) + retry-on-fatal + early repair in _init_store.
 #   Refs: #65349 (concurrent gc), #79334/#79335 (size-cap loop), #83036
 #   (GC tmp packs/corruption), local 015/#78888. Keep until upstream merges
-#   the bare-repo-dir fix. Verified 2026-09-03: all 21 apply cleanly against
-#   v2026.8.31 in lexicographic order (016's hunk 3 depends on 015 having
-#   been applied first, 018 depends on 017, 025 stacks on 019's shutdown
-#   region, 030 stacks on 028 in agent_init.py — do NOT dry-run 016/018/025/
-#   026/030 standalone). 025 hunk 2 + 026 hunk 2 are adapted to the tag (see
-#   their headers); all other hunks apply verbatim with offsets.
-#   2026-09-10: 017 gained the portal_tags.py affinity-scope hunk and 018 the
-#   opencode-namespace rule (see their headers). Re-verified against the
-#   pre-017 state of v2026.8.31: both apply with zero fuzz/rejects and leave
-#   agent/auxiliary_client.py + agent/chat_completion_helpers.py
-#   byte-identical to the shipped tree (only portal_tags.py and
-#   opencode_affinity.py move).
-# 017 = upstream PR #101864 (merged to main after v2026.8.31, in no tag yet):
-#   x-opencode-session affinity header on every OpenCode request (main turn
-#   on all transports + auxiliary calls). Vendored trimmed to runtime files
-#   (new agent/opencode_affinity.py + chat_completion_helpers rename+wrap
-#   adapted to the tag's function head + auxiliary_client forwarding +
-#   portal_tags affinity scope). The portal_tags.py hunk (affinity-scope
-#   ContextVar + get/set/reset) was dropped in the first trim and MUST stay:
-#   without it opencode_affinity's get_affinity_scope import raises on this
-#   tag, the bare except swallows it, and every context-less aux thread
-#   (title generation) loses the header -> relay 400 MissingSessionID.
-#   Upstream tests/website hunks excluded (not shipped in the image).
-#   Drop when the base tag includes #101864.
-# 018 = hermes-office specific (NOT upstream): named custom providers
-#   fronting the relay (custom:opencode -> proxy IP) flatten to provider
-#   "custom" at runtime, so 017's target check misses on both signals;
-#   thread requested_provider through and match the name against the whole
-#   `opencode` / `opencode-*` namespace after stripping the `custom:`
-#   prefix (_is_opencode_custom_name). The namespace rule is deliberate:
-#   opencode_provider_family is a built-in-family allowlist
-#   (opencode/opencode-zen*/opencode-go*/opencode-free*) and locally
-#   `custom:opencode-chat` fronts the same relay too. Family check still
-#   runs first — hermes_cli.models stays the single owner of the canonical
-#   families. Main turn uses agent.requested_provider, aux uses the
-#   turn-context record. Revisit if upstream covers custom providers
-#   behind proxies.
-# 019 = upstream PR #100972 (fixes #99882, merged to main after v2026.8.31):
-#   FIFO overflow orphan rescue + shutdown flush of the overflow tail
-#   (gateway/run.py + gateway/shutdown_flush.py). Drop when base tag
-#   includes #100972.
-# 020 = upstream PR #101968: Muse Spark tool-use enforcement — add "muse" to
-#   TOOL_USE_ENFORCEMENT_MODELS + EXECUTION_GUIDANCE_MODELS
-#   (agent/prompt_builder.py); without it Muse Spark answers in prose with 0
-#   tool calls on defaults (#96550). Drop when base tag includes #101968.
-# 021 = upstream PR #101949: Muse Spark 1M context — static "muse-spark" entry
-#   + commandcode live /models probe (agent/model_metadata.py) + opencode-free
-#   models.dev alias (agent/models_dev.py). Drop when tag includes #101949.
-# 022 = upstream PR #101948: Muse Spark 1.3 selectable everywhere — 1M entries
-#   + stale-cache guard (model_metadata.py), 1.3 SKUs in curated lists
-#   (hermes_cli/models.py) + setup pool (hermes_cli/setup.py). Companions
-#   020/021. Drop when base tag includes #101948.
-# 023 = upstream PR #101499 (SECURITY): /goal gate add (shell=True at every
-#   goal turn, no approval) now requires an explicitly-configured gateway
-#   admin (gateway/slash_commands.py). Drop when tag includes #101499.
-# 024 = upstream PR #100909: Matrix password-auth (no token) counts as a
-#   credential for the reconnect queue (gateway/run.py); no-op for token
-#   setups. Drop when base tag includes #100909.
-# 025 = upstream PR #101118: quiesce the gateway thread pool BEFORE closing
-#   SessionDBs at shutdown (gateway/run.py) — avoids the post-close late-write
-#   corruption (#101093/#101064). ADAPTED: upstream's shared-DB final sweep
-#   (absent in this tag) omitted; stacks on 019. Drop when tag has #101118.
-# 026 = upstream PR #100746: provider-overflow recovery stays armed across the
-#   post-compaction rebuild; fails closed instead of silently truncating
-#   (agent/conversation_loop.py). ADAPTED: init-site hunk re-anchored to the
-#   tag. Companion to 019. Drop when base tag includes #100746.
-# 027 = upstream PR #101483 (SECURITY, GHSA GitSpawn RCE): sanitize the git
-#   process env for every spawned git (GIT_CONFIG_NOSYSTEM=1, drop ambient
-#   GIT_CONFIG_COUNT/-c). Drop when base tag includes #101483.
-# 028 = upstream PR #100967: tool-call loop guardrails halt runaway
-#   identical-call/result streaks (saves tokens on long sessions). Drop when
-#   base tag includes #100967.
-# 029 = upstream PR #100979: validate deferred-tool args against the schema
-#   (previously bypassed). Drop when base tag includes #100979.
-# 030 = upstream PR #100135 (fixes #17929): try the user-configured fallback
-#   chain before failing fast with no credentials; no-op without
-#   fallback_model. Stacks on 028 (same file, different region). Drop when
-#   base tag includes #100135.
+#   the bare-repo-dir fix.
+# 018 = hermes-office specific (NOT upstream): named custom providers fronting
+#   the relay (custom:opencode -> proxy IP) flatten to provider "custom" at
+#   runtime, so is_opencode_target misses on BOTH signals; thread
+#   requested_provider through and match the name against the whole
+#   `opencode` / `opencode-*` namespace after stripping the `custom:` prefix
+#   (_is_opencode_custom_name). Since v2026.9.11 upstream's is_opencode_target
+#   ALSO matches by base_url host "opencode.ai", so 018 is a no-op for
+#   providers pointed at opencode.ai and only earns its keep for a base_url
+#   elsewhere (the commented-out internal proxy). The family check still runs
+#   first: hermes_cli.models stays the single owner of the canonical families.
+#   Revisit if upstream covers custom providers behind proxies.
 COPY patches/ /tmp/hermes-patches/
 RUN set -eux; \
     if ls /tmp/hermes-patches/*.patch >/dev/null 2>&1; then \
@@ -290,7 +247,7 @@ USER root
 # Create venvs as root — chown back to hermes so runtime access works.
 # NOTE 1: uv 0.11+ in base v2026.8.19 defaults to downloading CPython 3.11 when
 #         no --python is given, which breaks the cp313 torch wheels. Pin 3.13.
-# NOTE 2: base v2026.8.19 sets [tool.uv] exclude-newer = "14 days" in
+# NOTE 2: base images since v2026.8.19 set [tool.uv] exclude-newer = "14 days" in
 #         /opt/hermes/pyproject.toml. Since the Dockerfile inherits WORKDIR
 #         /opt/hermes, uv resolves that config and refuses packages published
 #         in the last 14 days (e.g. docling 2.124.0). Run from /tmp to bypass.

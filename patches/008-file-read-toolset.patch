@@ -1,11 +1,10 @@
-diff --git a/hermes_cli/setup.py b/hermes_cli/setup.py
-index 0d1a154811b4..b75ac1774d6e 100644
---- a/hermes_cli/setup.py
-+++ b/hermes_cli/setup.py
-@@ -3044,7 +3044,21 @@ def _blank_slate_minimal_toolsets(config: dict):
-                 # minimal Blank Slate surface (#57315).
+diff --git a/hermes_cli/setup_quick.py b/hermes_cli/setup_quick.py
+--- a/hermes_cli/setup_quick.py
++++ b/hermes_cli/setup_quick.py
+@@ -178,7 +178,21 @@ def _blank_slate_minimal_toolsets(config: dict):
+             # here causes model_tools to subtract their tools (terminal, read_file, …) from the minimal
+             # Blank Slate surface (#57315).
              all_keys.add(k)
- 
 -        disabled = sorted(all_keys - keep)
 +        disabled = all_keys - keep
 +
@@ -26,10 +25,9 @@ index 0d1a154811b4..b75ac1774d6e 100644
              config.setdefault("agent", {})["disabled_toolsets"] = disabled
      except Exception as exc:
 diff --git a/hermes_cli/tools_config.py b/hermes_cli/tools_config.py
-index f3abfb4d9a94..3ece2625132b 100644
 --- a/hermes_cli/tools_config.py
 +++ b/hermes_cli/tools_config.py
-@@ -97,6 +97,7 @@ def _post_setup_no_window_flags(*, streams_to_console: bool = False) -> int:
+@@ -54,6 +54,7 @@ CONFIGURABLE_TOOLSETS = [
      ("browser",         "🌐 Browser Automation",       "navigate, click, type, scroll"),
      ("terminal",        "💻 Terminal & Processes",      "terminal, process"),
      ("file",            "📁 File Operations",           "read, write, patch, search"),
@@ -38,19 +36,17 @@ index f3abfb4d9a94..3ece2625132b 100644
      ("vision",          "👁️  Vision / Image Analysis",  "vision_analyze"),
      ("video",           "🎬 Video Analysis",            "video_analyze (requires video-capable model)"),
 diff --git a/toolsets.py b/toolsets.py
-index 5cd53fa7240e..24a91dd84ed4 100644
 --- a/toolsets.py
 +++ b/toolsets.py
-@@ -194,6 +194,12 @@
-         "tools": ["read_file", "write_file", "patch", "search_files"],
-         "includes": []
-     },
-+
-+    "file_read": {
-+        "description": "Read-only file tools: read files and search file contents/names (no write, patch, or create)",
-+        "tools": ["read_file", "search_files"],
-+        "includes": []
-+    },
-     
-     "tts": {
-         "description": "Text-to-speech: convert text to audio with Edge TTS (free), ElevenLabs, OpenAI, or xAI",
+@@ -122,6 +122,11 @@ TOOLSETS = {
+         "search (content + files)",
+         ["read_file", "write_file", "patch", "search_files"],
+     ),
++    "file_read": _ts(
++        "Read-only file tools: read files and search file contents/names "
++        "(no write, patch, or create)",
++        ["read_file", "search_files"],
++    ),
+     "tts": _ts("Text-to-speech: convert text to audio with Edge TTS (free), ElevenLabs, OpenAI, or xAI", ["text_to_speech"]),
+     "todo": _ts("Task planning and tracking for multi-step work", ["todo_list"]),
+     "memory": _ts("Persistent memory across sessions (personal notes + user profile)", ["memory"]),

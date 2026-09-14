@@ -19,15 +19,57 @@
 #   runs first: hermes_cli.models stays the single owner of the canonical
 #   families.
 #
-#   DEPENDS ON 017 (extends agent/opencode_affinity.py which 017 creates,
-#   and the two merge call sites 017 adds). Always apply patches in
-#   lexicographic order; do NOT dry-run 018 standalone (same sequential
-#   dependency pattern as 015 -> 016).
+#   2026-09-14 rebase: #101864 (017) is now IN the base tag v2026.9.11, so
+#   this patch is rebased directly onto upstream's rewritten
+#   agent/opencode_affinity.py (is_opencode_target now also matches by
+#   base_url host "opencode.ai"). Still needed for a base_url NOT on
+#   opencode.ai (the commented-out internal proxy). Always apply in
+#   lexicographic order; do NOT dry-run standalone.
+diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
+--- a/agent/auxiliary_client.py
++++ b/agent/auxiliary_client.py
+@@ -6142,7 +6142,17 @@ def _build_call_kwargs(
+     # OpenCode relay session affinity — same key as the main turn so compression/title/vision
+     # calls stay on the conversation's warm backend.
+     from agent.opencode_affinity import merge_opencode_session_headers
+-    return merge_opencode_session_headers(kwargs, provider, base_url, _runtime_main_value("session_id") or None)
++
++    # hermes-office 018: aux calls for a named custom provider also arrive
++    # as provider "custom"; recover the recorded main identity from the
++    # turn context (agent/turn_context.py stores requested_provider).
++    return merge_opencode_session_headers(
++        kwargs,
++        provider,
++        base_url,
++        _runtime_main_value("session_id") or None,
++        requested_provider=_runtime_main_value("requested_provider") or None,
++    )
+ 
+ 
+ def _validate_llm_response(
+diff --git a/agent/chat_completion_helpers.py b/agent/chat_completion_helpers.py
+--- a/agent/chat_completion_helpers.py
++++ b/agent/chat_completion_helpers.py
+@@ -1383,11 +1383,15 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
+     from agent.opencode_affinity import merge_opencode_session_headers
+ 
+     kwargs = _build_api_kwargs_for_mode(agent, api_messages, tools_for_api)
++    # hermes-office 018: pass the pre-canonicalization identity so named
++    # custom providers fronting the relay (custom:opencode -> proxy IP,
++    # runtime provider flattened to "custom") still match. No-op otherwise.
+     return merge_opencode_session_headers(
+         kwargs,
+         getattr(agent, "provider", None),
+         getattr(agent, "base_url", None),
+         getattr(agent, "session_id", None),
++        requested_provider=getattr(agent, "requested_provider", None),
+     )
+ 
+ 
 diff --git a/agent/opencode_affinity.py b/agent/opencode_affinity.py
-index 4f0cc5522e40..2108e65d0686 100644
 --- a/agent/opencode_affinity.py
 +++ b/agent/opencode_affinity.py
-@@ -22,17 +22,58 @@
+@@ -22,17 +22,58 @@ from typing import Any, Optional
  OPENCODE_SESSION_HEADER = "x-opencode-session"
  
  
@@ -87,7 +129,7 @@ index 4f0cc5522e40..2108e65d0686 100644
      except Exception:
          pass
      try:
-@@ -47,9 +88,10 @@
+@@ -47,9 +88,10 @@ def opencode_session_headers(
      provider: Optional[str],
      base_url: Optional[str],
      session_id: Optional[str] = None,
@@ -99,7 +141,7 @@ index 4f0cc5522e40..2108e65d0686 100644
          return {}
      try:
          from agent.portal_tags import get_affinity_scope, get_conversation_context
-@@ -68,13 +110,16 @@
+@@ -80,13 +122,16 @@ def merge_opencode_session_headers(
      provider: Optional[str],
      base_url: Optional[str],
      session_id: Optional[str] = None,
@@ -117,42 +159,3 @@ index 4f0cc5522e40..2108e65d0686 100644
      if headers:
          existing = kwargs.get("extra_headers")
          merged = dict(existing) if isinstance(existing, dict) else {}
-diff --git a/agent/chat_completion_helpers.py b/agent/chat_completion_helpers.py
---- a/agent/chat_completion_helpers.py
-+++ b/agent/chat_completion_helpers.py
-@@ -1854,11 +1854,15 @@
-     from agent.opencode_affinity import merge_opencode_session_headers
- 
-     kwargs = _build_api_kwargs_for_mode(agent, api_messages, tools_for_api)
-+    # hermes-office 018: pass the pre-canonicalization identity so named
-+    # custom providers fronting the relay (custom:opencode -> proxy IP,
-+    # runtime provider flattened to "custom") still match. No-op otherwise.
-     return merge_opencode_session_headers(
-         kwargs,
-         getattr(agent, "provider", None),
-         getattr(agent, "base_url", None),
-         getattr(agent, "session_id", None),
-+        requested_provider=getattr(agent, "requested_provider", None),
-     )
- 
- 
-diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
---- a/agent/auxiliary_client.py
-+++ b/agent/auxiliary_client.py
-@@ -9202,8 +9202,15 @@
-     # compression/title/vision calls stay on the conversation's warm backend.
-     from agent.opencode_affinity import merge_opencode_session_headers
- 
-+    # hermes-office 018: aux calls for a named custom provider also arrive
-+    # as provider "custom"; recover the recorded main identity from the
-+    # turn context (agent/turn_context.py stores requested_provider).
-     return merge_opencode_session_headers(
--        kwargs, provider, base_url, _runtime_main_value("session_id") or None
-+        kwargs,
-+        provider,
-+        base_url,
-+        _runtime_main_value("session_id") or None,
-+        requested_provider=_runtime_main_value("requested_provider") or None,
-     )
- 
- 
