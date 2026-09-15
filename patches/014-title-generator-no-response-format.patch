@@ -1,7 +1,7 @@
 diff --git a/agent/title_generator.py b/agent/title_generator.py
 --- a/agent/title_generator.py
 +++ b/agent/title_generator.py
-@@ -63,12 +63,15 @@ _TITLE_PROMPT_TEMPLATE = (
+@@ -84,12 +84,15 @@ _TITLE_PROMPT_TEMPLATE = (
  _LANGUAGE_RULE_MATCH_USER = "- Write the title in the same language as the user's message."
  _LANGUAGE_RULE_PINNED = "- Write the title in {language}."
  
@@ -23,11 +23,11 @@ diff --git a/agent/title_generator.py b/agent/title_generator.py
  
  # Control-tag wrappers around machine-authored content inside a nominal "user" message (Codex CLI's
  # RECOGNIZED_CONTROL_WRAPPERS): stripped, titling continues on what remains.
-@@ -266,7 +269,6 @@ def generate_title(
+@@ -299,7 +302,6 @@ def generate_title(
              messages=[{"role": "system", "content": prompt}, {"role": "user", "content": user_snippet}],
              # A title is a handful of tokens; a larger ceiling let chatty models burn seconds.
              max_tokens=64, temperature=0.3, timeout=timeout, main_runtime=main_runtime,
 -            extra_body={"response_format": _TITLE_RESPONSE_FORMAT},
-         )
-         title = _clean_title(_extract_title_text(response.choices[0].message.content or ""))
-         # Answer-shaped output guard: titling is a 3-7 word task, so a title with many words is a model that
+             # The module contract above promises thinking-disabled operation,
+             # but nothing enforced it: with the aux default reasoning_effort
+             # "" (provider default), Gemini enables internal thinking and

@@ -1,14 +1,14 @@
-ARG HERMES_AGENT_VERSION=v2026.9.11
+ARG HERMES_AGENT_VERSION=v2026.9.14
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.149
+ARG OFFICECLI_VERSION=v1.0.150
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
 ARG PPT_MASTER_VERSION=v6.4.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.126.0
+ARG DOCLING_VERSION=2.127.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=3fbf9c9d1f3c10c2d59d04aca426dee9ccc6ceb32d255c61e93acc3b4f75fae6
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.28.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=c6373ec4c2f922e89f45ac91889404d312ba29a31f205b0ad9a725a3894ca246
 ARG PDFCPU_VERSION=0.15.0
@@ -145,7 +145,8 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
 #
-# As of v2026.9.11 (v0.21.2) the roster is 8 patches. 17 were retired:
+# As of v2026.9.14 (v0.21.3) the roster is 8 patches, unchanged from v0.21.2.
+# 17 were retired at v2026.9.11 (v0.21.2):
 # 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
 # timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the
 # rest were retired on this bump after every one of their upstream merge
@@ -162,11 +163,28 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # now carries them, NOT because this deployment stopped using muse-spark — the
 # two reasons happen to coincide.
 #
-# All 8 survivors were re-anchored against v2026.9.11 on 2026-09-14 and verified
-# by a real `patch -p1` apply in lexicographic order on a pristine checkout
-# (rc=0, zero .rej/.orig, resulting files byte-identical to the authored tree).
-# Upstream's codebase decomposition relocated several targets — pre-2026-09-14
-# anchors do NOT apply:
+# 2026-09-15 sweep (v2026.9.14 / v0.21.3): roster stays at 8. None of the
+# survivors' upstream PRs merged in the 1,039 commits / 338 PRs this tag rolls
+# up (#77100 still CLOSED-not-merged; #44347 / #85285 / #85713 / #78929 /
+# #78944 still OPEN) and every flagged bug is still present in the tagged
+# source, so nothing was retired:
+#   no active_turn_pid / active_turn_owner_alive (011), no node-compile-cache
+#   exclude (015), _repair_bare_repo_dirs still called ONLY from _gc_store
+#   (016), no file_read toolset (008), no Matrix adapter-loop bridge (007),
+#   is_opencode_target still misses a custom provider on a non-opencode.ai
+#   base_url (018), should_use_direct_api_call still forces ALL cron/delegation
+#   inline (004), title_generator still sends response_format (014).
+# 7 of 8 re-applied unchanged (offset-only). 014 was re-anchored: upstream
+# inserted reasoning_config={"enabled": False} at its call site, which drifted
+# only hunk #2's trailing context — the patch content is otherwise identical.
+#
+# All 8 were re-verified against v2026.9.14 by a real `patch -p1` apply in
+# lexicographic order on a pristine checkout (rc=0, zero .rej/.orig, 014
+# byte-identical to the authored tree).
+#
+# Previous sweep (v2026.9.11, 2026-09-14): all 8 re-anchored against v2026.9.11
+# and verified by the same real-apply check. Upstream's codebase decomposition
+# relocated several targets — pre-2026-09-14 anchors do NOT apply:
 #   007 -> tools/send_message_senders.py (send_message_tool.py was split into
 #          send_message_tool/targets/senders)
 #   008 -> hermes_cli/setup_quick.py (moved out of hermes_cli/setup.py)
@@ -197,7 +215,9 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   Anthropic all 400 ("This response_format type is unavailable now") on every
 #   fresh session. This patch drops response_format entirely; _extract_title_text
 #   already falls back through JSON-dict -> loose regex -> prose+think-strip, so
-#   titles still work. Keep until #85713 (retry-cascade) merges upstream.
+#   titles still work. Re-anchored on the v2026.9.14 bump (upstream added
+#   reasoning_config={"enabled": False} right after the extra_body line).
+#   Keep until #85713 (retry-cascade) merges upstream.
 # 015 = upstream #78888 (open): checkpoint_manager DEFAULT_EXCLUDES missing
 #   node-compile-cache/ — the desktop/TUI launcher writes this cache (can be
 #   root-owned) into <workdir>/tmp/node-compile-cache/, so `git add -A` aborts
