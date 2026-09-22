@@ -22,14 +22,14 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.150`
+- Current pinned version in `Dockerfile`: `v1.0.152`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
 - `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
-- Current pinned version in `Dockerfile`: `v6.4.0`
+- Current pinned version in `Dockerfile`: `v6.6.0`
 
 ### ImageMagick
 - Installed from the distro package as `imagemagick`
@@ -38,10 +38,10 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.127.0`
+- Current pinned version in `Dockerfile`: `2.129.0`
 - Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.13.0+cpu` and `torchvision==0.28.0+cpu`
-  2. install `docling==2.127.0` from the normal Python package index
+  2. install `docling==2.129.0` from the normal Python package index
 - The upstream Hermes base image keeps `[tool.uv] exclude-newer = "14 days"` in `/opt/hermes/pyproject.toml`; the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs
 - Current image installs the base `docling` package (not the optional VLM extras)
 
@@ -249,6 +249,28 @@ rtk gain                     # token savings dashboard
 - If the plugin is not loaded, verify `~/.hermes/config.yaml` has `rtk-rewrite` under `plugins.enabled`
 - The plugin is designed to **fail open** — if RTK binary is missing, times out, or crashes, the original command runs unchanged
 - Check Hermes logs for lines mentioning `rtk_hermes` or `rtk-rewrite`
+
+## Custom providers fronting the OpenCode relay (session affinity)
+
+The base image sends `x-opencode-session` on requests to an OpenCode target so the relay pins a conversation to the same backend (warm prompt cache) and never rejects a request with `400 MissingSessionID` ([#105841](https://github.com/NousResearch/hermes-agent/issues/105841)). Upstream recognises a target by built-in family name, by any `opencode-<family>-*` name, or by an `opencode.ai` host.
+
+A **named custom provider** that fronts the relay from another address (for example `custom:opencode` pointed at an internal proxy instead of `opencode.ai`) is flattened to provider `custom` at runtime and carries the proxy address as its `base_url`, so all three upstream signals miss. Two ways to cover that case:
+
+1. **Config-only (upstream, v0.21.4+)** — annotate the provider entry with the header name. It applies to the main turn and to every auxiliary call (compression, titles, vision), matched by `base_url` route:
+
+   ```yaml
+   providers:
+     opencode-relay:
+       api: http://<proxy-ip>:8878/v1
+       api_key: ...
+       session_affinity_header: x-opencode-session   # camelCase alias: sessionAffinityHeader
+   ```
+
+   Caveat: this path emits the header only once a conversation/session key resolves. It has no `oneshot-<hex>` fallback, so a relay that *hard-requires* the header would still get headerless stateless one-shot requests (standalone prompts, summaries outside a session).
+
+2. **Bundled patch `018-opencode-custom-provider`** — matches the pre-canonicalization provider name against the whole `opencode` / `opencode-*` namespace regardless of `base_url`, and reuses the native path, which *does* generate the `oneshot-` fallback. Use this when the relay hard-requires the header. Purely name-based, so no `config.yaml` annotation is needed.
+
+With the current `config.yaml` (`providers.opencode` / `opencode-chat` → `https://opencode.ai/zen/go/v1`) neither is required: upstream's host match already covers both entries.
 
 ## Tool-specific notes
 

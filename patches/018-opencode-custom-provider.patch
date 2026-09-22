@@ -4,44 +4,48 @@
 #   Why: at runtime a named custom provider flattens to agent.provider ==
 #   "custom" (hermes_cli/runtime_provider.py sets result["provider"] =
 #   "custom"), and agent.base_url is the relay-proxy address (e.g.
-#   http://<proxy-ip>:8878/v1), so upstream PR #101864's is_opencode_target
-#   misses on BOTH signals: opencode_provider_family("custom") is None and
-#   the host is not opencode.ai. The original identity survives in
-#   agent.requested_provider ("custom:opencode") on the main turn and in
-#   auxiliary_client's _RUNTIME_MAIN_CONTEXT["requested_provider"] for aux
-#   calls (set by agent/turn_context.py) — thread it through and match the
-#   name against the whole `opencode` / `opencode-*` namespace (helper
-#   _is_opencode_custom_name) after stripping any `custom:` prefix.
-#   Rationale: opencode_provider_family is a built-in-family allowlist
-#   (opencode / opencode-zen* / opencode-go* / opencode-free*), but locally
-#   `custom:opencode-chat` and friends front the same relay — so the
-#   namespace, not a per-name list, is the matcher. The family check still
-#   runs first: hermes_cli.models stays the single owner of the canonical
-#   families.
+#   http://<proxy-ip>:8878/v1), so upstream's is_opencode_target misses on
+#   BOTH signals: opencode_provider_family("custom") is None and the host is
+#   not opencode.ai. The original identity survives in agent.requested_provider
+#   ("custom:opencode") on the main turn and in auxiliary_client's
+#   _RUNTIME_MAIN_CONTEXT["requested_provider"] for aux calls (set by
+#   agent/turn_context.py) — thread it through and match the name against the
+#   whole `opencode` / `opencode-*` namespace (helper _is_opencode_custom_name)
+#   after stripping any `custom:` prefix. Rationale: opencode_provider_family is
+#   a built-in-family allowlist (opencode / opencode-zen* / opencode-go* /
+#   opencode-free*), but locally `custom:opencode-chat` and friends front the
+#   same relay — so the namespace, not a per-name list, is the matcher. The
+#   family check still runs first: hermes_cli.models stays the single owner of
+#   the canonical families.
 #
-#   2026-09-14 rebase: #101864 (017) is now IN the base tag v2026.9.11, so
-#   this patch is rebased directly onto upstream's rewritten
-#   agent/opencode_affinity.py (is_opencode_target now also matches by
-#   base_url host "opencode.ai"). Still needed for a base_url NOT on
-#   opencode.ai (the commented-out internal proxy). Always apply in
-#   lexicographic order; do NOT dry-run standalone.
+#   2026-09-22 rebase (v2026.9.21): upstream rewrote this module —
+#   merge_opencode_session_headers -> merge_session_affinity_headers — and added
+#   an opt-in `providers.<name>.session_affinity_header` config knob. Re-anchored
+#   onto the new API and KEPT, because the config knob has no `oneshot-<hex>`
+#   fallback: a relay that hard-requires the header (OpenCode Go 400s with
+#   MissingSessionID, #105841) would still see headerless stateless requests.
+#   The knob is also matched by base_url route, so it only covers entries the
+#   operator explicitly annotates.
+#
+#   The current live config (providers.opencode / opencode-chat ->
+#   https://opencode.ai/zen/go/v1) is already covered by upstream's
+#   _is_opencode_endpoint host match, so this patch is a no-op today and earns
+#   its keep only when a base_url sits off opencode.ai (the commented-out
+#   internal proxy). Always apply in lexicographic order; do NOT dry-run
+#   standalone.
 diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
 --- a/agent/auxiliary_client.py
 +++ b/agent/auxiliary_client.py
-@@ -6142,7 +6142,17 @@ def _build_call_kwargs(
-     # OpenCode relay session affinity — same key as the main turn so compression/title/vision
-     # calls stay on the conversation's warm backend.
-     from agent.opencode_affinity import merge_opencode_session_headers
--    return merge_opencode_session_headers(kwargs, provider, base_url, _runtime_main_value("session_id") or None)
-+
-+    # hermes-office 018: aux calls for a named custom provider also arrive
-+    # as provider "custom"; recover the recorded main identity from the
-+    # turn context (agent/turn_context.py stores requested_provider).
-+    return merge_opencode_session_headers(
-+        kwargs,
-+        provider,
-+        base_url,
-+        _runtime_main_value("session_id") or None,
+@@ -6621,7 +6621,13 @@ def _build_call_kwargs(
+     # Conversation affinity (OpenCode relay, opt-in custom-provider header) — same key as the main
+     # turn so compression/title/vision calls stay on the conversation's warm backend.
+     from agent.opencode_affinity import merge_session_affinity_headers
+-    return merge_session_affinity_headers(kwargs, provider, base_url, _runtime_main_value("session_id") or None)
++    # hermes-office 018: aux calls for a named custom provider also arrive as
++    # provider "custom"; recover the recorded main identity from the turn
++    # context (agent/turn_context.py stores requested_provider).
++    return merge_session_affinity_headers(
++        kwargs, provider, base_url, _runtime_main_value("session_id") or None,
 +        requested_provider=_runtime_main_value("requested_provider") or None,
 +    )
  
@@ -50,18 +54,13 @@ diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
 diff --git a/agent/chat_completion_helpers.py b/agent/chat_completion_helpers.py
 --- a/agent/chat_completion_helpers.py
 +++ b/agent/chat_completion_helpers.py
-@@ -1383,11 +1383,15 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
-     from agent.opencode_affinity import merge_opencode_session_headers
- 
-     kwargs = _build_api_kwargs_for_mode(agent, api_messages, tools_for_api)
-+    # hermes-office 018: pass the pre-canonicalization identity so named
-+    # custom providers fronting the relay (custom:opencode -> proxy IP,
-+    # runtime provider flattened to "custom") still match. No-op otherwise.
-     return merge_opencode_session_headers(
-         kwargs,
+@@ -1485,6 +1485,10 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
          getattr(agent, "provider", None),
          getattr(agent, "base_url", None),
          getattr(agent, "session_id", None),
++        # hermes-office 018: pass the pre-canonicalization identity so a named
++        # custom provider fronting the relay (custom:opencode -> proxy IP,
++        # runtime provider flattened to "custom") still matches. No-op otherwise.
 +        requested_provider=getattr(agent, "requested_provider", None),
      )
  
@@ -69,8 +68,8 @@ diff --git a/agent/chat_completion_helpers.py b/agent/chat_completion_helpers.py
 diff --git a/agent/opencode_affinity.py b/agent/opencode_affinity.py
 --- a/agent/opencode_affinity.py
 +++ b/agent/opencode_affinity.py
-@@ -22,17 +22,58 @@ from typing import Any, Optional
- OPENCODE_SESSION_HEADER = "x-opencode-session"
+@@ -57,17 +57,59 @@ def opencode_transport(provider: Optional[str], model: Optional[str], base_url:
+     return api_mode, normalize_opencode_base_url(provider, api_mode, url)
  
  
 -def is_opencode_target(provider: Optional[str], base_url: Optional[str]) -> bool:
@@ -78,13 +77,13 @@ diff --git a/agent/opencode_affinity.py b/agent/opencode_affinity.py
 +    """True for a name in the ``opencode`` / ``opencode-*`` provider namespace.
 +
 +    hermes-office 018: a named custom provider fronting the relay
-+    (``custom:opencode``, ``custom:opencode-chat``, ``custom:opencode-go-x``,
-+    ...) is flattened to provider ``"custom"`` at runtime, and
-+    :func:`opencode_provider_family` from ``hermes_cli.models`` only knows the
-+    built-in families (``opencode`` / ``opencode-zen*`` / ``opencode-go*`` /
-+    ``opencode-free*``). Everything else in the namespace is matched here, so
-+    the whole namespace shares one rule instead of a per-name allowlist. Any
-+    vendor prefix (``custom:``) is stripped first.
++    (``custom:opencode``, ``custom:opencode-chat``, ...) is flattened to provider
++    ``"custom"`` at runtime, and :func:`opencode_provider_family` from
++    ``hermes_cli.models`` only knows the built-in families (``opencode`` /
++    ``opencode-zen*`` / ``opencode-go*`` / ``opencode-free*``). Everything else
++    in the namespace is matched here, so the whole namespace shares one rule
++    instead of a per-name allowlist. Any vendor prefix (``custom:``) is
++    stripped first.
 +    """
 +    name = str(provider or "").strip().lower()
 +    if ":" in name:
@@ -99,20 +98,21 @@ diff --git a/agent/opencode_affinity.py b/agent/opencode_affinity.py
 +) -> bool:
      """True when *provider* or *base_url* addresses the OpenCode relay.
  
-     Matches the built-in opencode-zen/go/free providers, custom
+     Matches the built-in opencode-zen/go providers, custom
      ``opencode-<family>-*`` providers, and any base_url hosted on opencode.ai.
 +
-+    hermes-office: also matches named custom providers fronting the relay
++    hermes-office: also matches a named custom provider fronting the relay
 +    (e.g. ``custom:opencode`` -> proxy IP). The runtime flattens those to
-+    provider ``"custom"`` with a proxy base_url, so both upstream signals
-+    miss; the pre-canonicalization identity in *requested_provider* is
-+    checked, with any ``custom:`` prefix stripped, against the
-+    ``opencode`` / ``opencode-*`` namespace.
++    provider ``"custom"`` with a proxy base_url, so both upstream signals miss;
++    the pre-canonicalization identity in *requested_provider* is checked, with
++    any ``custom:`` prefix stripped, against the ``opencode`` / ``opencode-*``
++    namespace. A custom entry that declares
++    ``providers.<name>.session_affinity_header`` is already covered by the
++    generic upstream path -- but that path has no ``oneshot-`` fallback, so a
++    relay that hard-requires the header (#105841) still needs this branch.
      """
 +    # hermes-office 018: named custom providers in the opencode namespace.
-+    if _is_opencode_custom_name(provider) or _is_opencode_custom_name(
-+        requested_provider
-+    ):
++    if _is_opencode_custom_name(provider) or _is_opencode_custom_name(requested_provider):
 +        return True
      try:
          from hermes_cli.models import opencode_provider_family
@@ -129,33 +129,37 @@ diff --git a/agent/opencode_affinity.py b/agent/opencode_affinity.py
      except Exception:
          pass
      try:
-@@ -47,9 +88,10 @@ def opencode_session_headers(
+@@ -93,13 +135,14 @@ def opencode_session_headers(
      provider: Optional[str],
      base_url: Optional[str],
      session_id: Optional[str] = None,
 +    requested_provider: Optional[str] = None,
  ) -> dict[str, str]:
-     """Return ``{"x-opencode-session": <key>}`` for OpenCode targets, else ``{}``."""
+     """Return ``{"x-opencode-session": <key>}`` for OpenCode targets, else ``{}``.
+ 
+     OpenCode targets always get a key: when no conversation/session key resolves, an
+     ephemeral ``oneshot-<hex>`` value is generated (OpenCode Go rejects requests without
+     the header, #105841)."""
 -    if not is_opencode_target(provider, base_url):
 +    if not is_opencode_target(provider, base_url, requested_provider):
          return {}
-     try:
-         from agent.portal_tags import get_affinity_scope, get_conversation_context
-@@ -80,13 +122,16 @@ def merge_opencode_session_headers(
+     key = resolve_affinity_key(session_id)
+     if not key:
+@@ -133,13 +176,16 @@ def merge_session_affinity_headers(
      provider: Optional[str],
      base_url: Optional[str],
      session_id: Optional[str] = None,
 +    requested_provider: Optional[str] = None,
  ) -> dict[str, Any]:
-     """Merge the affinity header into ``kwargs["extra_headers"]`` (in place).
+     """Merge the affinity header(s) into ``kwargs["extra_headers"]`` (in place).
  
      Existing per-request headers win, so a caller-pinned value is preserved.
-     Non-OpenCode targets are left untouched.
+     Targets with neither source configured are left untouched.
      """
 -    headers = opencode_session_headers(provider, base_url, session_id)
 +    headers = opencode_session_headers(
 +        provider, base_url, session_id, requested_provider
 +    )
+     headers.update(custom_provider_session_affinity_headers(base_url, session_id))
      if headers:
          existing = kwargs.get("extra_headers")
-         merged = dict(existing) if isinstance(existing, dict) else {}

@@ -1,14 +1,14 @@
-ARG HERMES_AGENT_VERSION=v2026.9.14
+ARG HERMES_AGENT_VERSION=v2026.9.21
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.150
+ARG OFFICECLI_VERSION=v1.0.152
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
-ARG PPT_MASTER_VERSION=v6.4.0
+ARG PPT_MASTER_VERSION=v6.6.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.127.0
+ARG DOCLING_VERSION=2.129.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=3fbf9c9d1f3c10c2d59d04aca426dee9ccc6ceb32d255c61e93acc3b4f75fae6
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.28.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=c6373ec4c2f922e89f45ac91889404d312ba29a31f205b0ad9a725a3894ca246
 ARG PDFCPU_VERSION=0.15.0
@@ -20,8 +20,8 @@ ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_
 ARG CLAWMEM_VERSION=0.37.0
 ARG RTK_VERSION=v0.49.0
 ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
-ARG GH_VERSION=v2.100.0
-ARG GH_ASSET=gh_2.100.0_linux_amd64.tar.gz
+ARG GH_VERSION=v2.101.0
+ARG GH_ASSET=gh_2.101.0_linux_amd64.tar.gz
 ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH_ASSET}
 # Official sqlite3 CLI matching the base image's bundled libsqlite3 3.53.4 in
 # /usr/local/lib. Debian's /usr/bin/sqlite3 (compiled against 3.46.1) resolves
@@ -145,7 +145,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
 #
-# As of v2026.9.14 (v0.21.3) the roster is 8 patches, unchanged from v0.21.2.
+# As of v2026.9.21 (v0.21.4) the roster is 7 patches (was 8 at v2026.9.14).
 # 17 were retired at v2026.9.11 (v0.21.2):
 # 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
 # timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the
@@ -163,38 +163,44 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # now carries them, NOT because this deployment stopped using muse-spark — the
 # two reasons happen to coincide.
 #
-# 2026-09-15 sweep (v2026.9.14 / v0.21.3): roster stays at 8. None of the
-# survivors' upstream PRs merged in the 1,039 commits / 338 PRs this tag rolls
-# up (#77100 still CLOSED-not-merged; #44347 / #85285 / #85713 / #78929 /
-# #78944 still OPEN) and every flagged bug is still present in the tagged
-# source, so nothing was retired:
-#   no active_turn_pid / active_turn_owner_alive (011), no node-compile-cache
-#   exclude (015), _repair_bare_repo_dirs still called ONLY from _gc_store
-#   (016), no file_read toolset (008), no Matrix adapter-loop bridge (007),
-#   is_opencode_target still misses a custom provider on a non-opencode.ai
-#   base_url (018), should_use_direct_api_call still forces ALL cron/delegation
-#   inline (004), title_generator still sends response_format (014).
-# 7 of 8 re-applied unchanged (offset-only). 014 was re-anchored: upstream
-# inserted reasoning_config={"enabled": False} at its call site, which drifted
-# only hunk #2's trailing context — the patch content is otherwise identical.
+# 2026-09-22 sweep (v2026.9.21 / v0.21.4): roster 8 -> 7. This tag is a patch
+# rollup of 1,812 PRs / 5,071 non-merge commits, so upstream drift was expected.
+# Every patch was re-verified three ways against a pristine checkout of the tag:
+# (a) a real `patch -p1 --dry-run` FORWARD and REVERSE per file, (b) every added
+# line searched in the tagged source, (c) the upstream issue/PR state plus
+# `gh api compare/v2026.9.21...<mergeCommit>` ancestry. No survivor's fix is
+# upstream: #77100 is still CLOSED-not-merged and #44347 / #85207 / #85713 /
+# #78888 / #65349 / #83036 are still OPEN, while each flagged bug is still
+# present in the tagged source (no active_turn_pid / active_turn_owner_alive,
+# no node-compile-cache exclude, _repair_bare_repo_dirs still called ONLY from
+# _gc_store, no file_read toolset, no Matrix adapter-loop bridge,
+# title_generator still sends response_format).
+# 4 of 7 re-applied unchanged (offset-only); 011, 014 and 018 were re-anchored.
 #
-# All 8 were re-verified against v2026.9.14 by a real `patch -p1` apply in
-# lexicographic order on a pristine checkout (rc=0, zero .rej/.orig, 014
-# byte-identical to the authored tree).
+# All 7 were re-verified against v2026.9.21 by a real `patch -p1` apply in
+# lexicographic order on a pristine checkout (rc=0, zero .rej/.orig, every
+# touched file compiled), plus a functional check of 018's new signature.
 #
-# Previous sweep (v2026.9.11, 2026-09-14): all 8 re-anchored against v2026.9.11
-# and verified by the same real-apply check. Upstream's codebase decomposition
-# relocated several targets — pre-2026-09-14 anchors do NOT apply:
-#   007 -> tools/send_message_senders.py (send_message_tool.py was split into
-#          send_message_tool/targets/senders)
-#   008 -> hermes_cli/setup_quick.py (moved out of hermes_cli/setup.py)
-#   011 -> gateway/session.py + session_lifecycle.py + run_startup.py (session
-#          decomposition; turn-marker logic now lives in session_lifecycle)
-#   018 -> rebased onto upstream's rewritten agent/opencode_affinity.py
-# 004 = environment-specific (NOT upstream): narrow the #62151 direct_api_call
-#   workaround to openrouter/nous only — custom providers (e.g. deepseek)
-#   must keep streaming to avoid ServerDisconnectedError behind proxies
-#   (#71268). Keep — upstream still forces all cron/delegation inline.
+# Previous sweeps:
+# v2026.9.14 / v0.21.3: roster stayed at 8; 7 of 8 re-applied offset-only and
+#   014 was re-anchored (upstream inserted reasoning_config={"enabled": False}
+#   at its call site).
+# v2026.9.11 / v0.21.2: all 8 re-anchored after upstream's decomposition moved
+#   007 -> tools/send_message_senders.py, 008 -> hermes_cli/setup_quick.py,
+#   011 -> gateway/session.py + session_lifecycle.py + run_startup.py, and 018
+#   onto a rewritten agent/opencode_affinity.py.
+# RETIRED at v2026.9.21 — 004 (narrow direct_api_call streaming). Its premise is
+#   gone. It returned False for non-openrouter/nous providers so cron/delegation
+#   turns kept the streaming wire, because at authoring time
+#   should_use_direct_api_call()==True meant the NON-streaming path. Upstream
+#   #100906 (c5b99a3, verified an ancestor of the tag) now routes those contexts
+#   to interruptible_streaming_api_call instead: the request still runs INLINE on
+#   the conversation thread (the #62151 nested-pool deadlock stays closed) but
+#   STREAMS on the wire, which is exactly the liveness property 004 wanted.
+#   #71268 is CLOSED as fixed by that commit. Keeping 004 would now be actively
+#   harmful: returning False pushes a custom-provider cron turn back onto a
+#   worker thread (_NonStreamRequest is documented as "on a worker thread"),
+#   reintroducing the nested-pool wedge.
 # 007 = upstream #77100 (CLOSED, not merged): Matrix adapter loop-mismatch
 #   bridge — keep until #77100 merges upstream.
 # 008 = upstream #44347 (open): file_read toolset (read-only subset of file:
@@ -209,15 +215,21 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   the whole history and delivering divergent finals. Durable active-turn
 #   marker now records the owning gateway PID; boot recovery/auto-resume refuse
 #   to start a second loop while the owner is alive (PR #85285, open). Keep
-#   until #85285 merges upstream.
+#   until #85285 merges upstream. RE-ANCHORED on the v2026.9.21 bump: upstream
+#   added a `transport_profile` argument to the SessionEntry(...) constructor,
+#   which drifted only hunk #4's trailing context (the single
+#   `model_override=..., **plain` line became three).
 # 014 = upstream #82816/#85713 (open): title_generator unconditionally sent
 #   OpenAI-only response_format json_schema strict -> Console Go / DeepSeek /
 #   Anthropic all 400 ("This response_format type is unavailable now") on every
 #   fresh session. This patch drops response_format entirely; _extract_title_text
 #   already falls back through JSON-dict -> loose regex -> prose+think-strip, so
-#   titles still work. Re-anchored on the v2026.9.14 bump (upstream added
-#   reasoning_config={"enabled": False} right after the extra_body line).
-#   Keep until #85713 (retry-cascade) merges upstream.
+#   titles still work. Keep until #85713 (retry-cascade) merges upstream.
+#   RE-ANCHORED on the v2026.9.21 bump: upstream's call site is now
+#   `max_tokens=TITLE_MAX_TOKENS, temperature=None` (was `64` / `0.3`), which
+#   drifted only hunk #2's leading context. Upstream STILL sends
+#   response_format unconditionally (now line ~456), so the patch is unchanged
+#   in substance.
 # 015 = upstream #78888 (open): checkpoint_manager DEFAULT_EXCLUDES missing
 #   node-compile-cache/ — the desktop/TUI launcher writes this cache (can be
 #   root-owned) into <workdir>/tmp/node-compile-cache/, so `git add -A` aborts
@@ -233,8 +245,9 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   BEFORE the next checkpoint. This patch adds proactive repair before every
 #   git call (_run_git) + retry-on-fatal + early repair in _init_store.
 #   Refs: #65349 (concurrent gc), #79334/#79335 (size-cap loop), #83036
-#   (GC tmp packs/corruption), local 015/#78888. Keep until upstream merges
-#   the bare-repo-dir fix.
+#   (GC tmp packs/corruption), local 015/#78888. Depends on 015: its hunk #3
+#   calls _ensure_store_excludes(), which 015 defines — add/remove the two
+#   together. Keep until upstream merges the bare-repo-dir fix.
 # 018 = hermes-office specific (NOT upstream): named custom providers fronting
 #   the relay (custom:opencode -> proxy IP) flatten to provider "custom" at
 #   runtime, so is_opencode_target misses on BOTH signals; thread
@@ -245,7 +258,16 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   providers pointed at opencode.ai and only earns its keep for a base_url
 #   elsewhere (the commented-out internal proxy). The family check still runs
 #   first: hermes_cli.models stays the single owner of the canonical families.
-#   Revisit if upstream covers custom providers behind proxies.
+#   RE-ANCHORED and KEPT on the v2026.9.21 bump: upstream rewrote the module
+#   (merge_opencode_session_headers -> merge_session_affinity_headers) and added
+#   an opt-in `providers.<name>.session_affinity_header` config knob (documented
+#   in the README section "Custom providers fronting the OpenCode relay"). The
+#   knob was NOT treated as a replacement, because it has no `oneshot-<hex>`
+#   fallback: a relay that hard-requires the header (OpenCode Go 400s with
+#   MissingSessionID, #105841) would still see headerless stateless requests.
+#   The knob is also matched by base_url route, so it covers only entries the
+#   operator explicitly annotates. 018 matches by NAME, so it stays effective
+#   for any base_url. Revisit if upstream gives the knob the same fallback.
 COPY patches/ /tmp/hermes-patches/
 RUN set -eux; \
     if ls /tmp/hermes-patches/*.patch >/dev/null 2>&1; then \
