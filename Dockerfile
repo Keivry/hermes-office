@@ -1,4 +1,4 @@
-ARG HERMES_AGENT_VERSION=v2026.9.21
+ARG HERMES_AGENT_VERSION=v2026.9.24
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
@@ -8,17 +8,17 @@ ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
 ARG PPT_MASTER_VERSION=v6.6.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.129.0
-ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=3fbf9c9d1f3c10c2d59d04aca426dee9ccc6ceb32d255c61e93acc3b4f75fae6
-ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.28.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=c6373ec4c2f922e89f45ac91889404d312ba29a31f205b0ad9a725a3894ca246
+ARG DOCLING_VERSION=2.130.0
+ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.14.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=160e1bc46aeded3111d2801f8ae10dc9a1b946843a7e126b4dbf5e19c5706e95
+ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.29.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=6ff3b816ec955f3ef9f32d1e698e1856549e2e03637c358ee067c6f5f17f74fa
 ARG PDFCPU_VERSION=0.15.0
 ARG PDFCPU_ASSET_URL=https://github.com/pdfcpu/pdfcpu/releases/download/v${PDFCPU_VERSION}/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64.tar.xz
 ARG BUN_VERSION=1.4.2
 ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
-ARG CLAWMEM_VERSION=0.37.0
-ARG RTK_VERSION=v0.49.0
+ARG CLAWMEM_VERSION=0.39.0
+ARG RTK_VERSION=v0.50.0
 ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 ARG GH_VERSION=v2.101.0
 ARG GH_ASSET=gh_2.101.0_linux_amd64.tar.gz
@@ -145,7 +145,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
 #
-# As of v2026.9.21 (v0.21.4) the roster is 7 patches (was 8 at v2026.9.14).
+# As of v2026.9.24 (v0.21.5) the roster is 7 patches (was 8 at v2026.9.14).
 # 17 were retired at v2026.9.11 (v0.21.2):
 # 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
 # timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the
@@ -181,6 +181,26 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # lexicographic order on a pristine checkout (rc=0, zero .rej/.orig, every
 # touched file compiled), plus a functional check of 018's new signature.
 #
+# 2026-09-24 sweep (v2026.9.24 / v0.21.5): roster stays at 7. Patch rollup of 460
+# PRs / 1,610 non-merge commits (curated notes deferred to v0.22.0) -- drift was
+# checked, not assumed: (a) every patch real-applied to a pristine checkout in
+# lexicographic order, (b) upstream issue/PR state plus merge-commit ancestry vs
+# v2026.9.24, (c) each flagged bug still present in the tagged source.
+# No survivor's fix is upstream: #77100 is still CLOSED-not-merged and #44347 /
+# #85207 / #85285 / #85713 / #78888 / #65349 / #83036 are still OPEN.
+# 007 STAYS despite its closing comment claiming the generic loop bridge covers the
+#   same ground: that bridge lives in _send_via_adapter (slack/wecom + the plugin
+#   fallback), while matrix dispatches through _CHUNKED_ROUTES ->
+#   _send_matrix_via_adapter, and cron standalone delivery still runs the send under
+#   asyncio.run() on a fresh thread loop (cron/scheduler_delivery.py) -- the loop
+#   mismatch 007 bridges is therefore still reachable.
+# 016 STAYS: its upstream triage comment names #65354 as the fix, but that PR is OPEN.
+# 011 was RE-ANCHORED: upstream replaced the _now() argument at its mark_turn_active
+#   call site with datetime.now(timezone.utc); the other 6 re-applied offset-only.
+# Verified: 7 x `patch -p1` on a pristine v2026.9.24 tree -> rc=0, zero .rej/.orig,
+# all 12 touched files py_compile clean, per-patch markers present, plus a functional
+# check of 018 (custom:opencode -> True, commandcode -> False, x-opencode-session
+# merged, oneshot- fallback intact, unrelated custom provider untouched).
 # Previous sweeps:
 # v2026.9.14 / v0.21.3: roster stayed at 8; 7 of 8 re-applied offset-only and
 #   014 was re-anchored (upstream inserted reasoning_config={"enabled": False}

@@ -9,7 +9,7 @@ diff --git a/gateway/run_startup.py b/gateway/run_startup.py
  from gateway.restart import (
      DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT, GATEWAY_FATAL_CONFIG_EXIT_CODE, is_global_startup_conflict
  )
-@@ -587,6 +588,32 @@ class GatewayStartupMixin:
+@@ -588,6 +589,32 @@ class GatewayStartupMixin:
              marker = entry.last_resume_marked_at or entry.updated_at
              if marker is not None and (now - marker).total_seconds() > window:
                  continue
@@ -45,7 +45,7 @@ diff --git a/gateway/run_startup.py b/gateway/run_startup.py
 diff --git a/gateway/session.py b/gateway/session.py
 --- a/gateway/session.py
 +++ b/gateway/session.py
-@@ -517,6 +517,12 @@ class SessionEntry:
+@@ -526,6 +526,12 @@ class SessionEntry:
      # SIGKILL/OOM so unclean startup recovers the exact session instead of guessing.
      active_turn_token: Optional[str] = None
      active_turn_started_at: Optional[datetime] = None
@@ -58,7 +58,7 @@ diff --git a/gateway/session.py b/gateway/session.py
      # Session-scoped /model override (model/provider/base_url ONLY — never credentials, see
      # sanitize_model_override). Persisted so a restart keeps the chosen model.
      model_override: Optional[Dict[str, str]] = None
-@@ -549,6 +555,7 @@ class SessionEntry:
+@@ -558,6 +564,7 @@ class SessionEntry:
          result["last_resume_marked_at"] = _iso(self.last_resume_marked_at)
          result["active_turn_token"] = self.active_turn_token
          result["active_turn_started_at"] = _iso(self.active_turn_started_at)
@@ -66,7 +66,7 @@ diff --git a/gateway/session.py b/gateway/session.py
          result.update((name, getattr(self, name)) for name in self._RESET_FIELDS)
          if self.model_override:
              # Defence-in-depth against an unsanitized dict stored directly.
-@@ -571,6 +578,12 @@ class SessionEntry:
+@@ -580,6 +587,12 @@ class SessionEntry:
                  logger.debug("Unknown platform value %r: %s", data["platform"], e)
          token = data.get("active_turn_token")
          started_at = _parse_iso(data.get("active_turn_started_at"))
@@ -79,7 +79,7 @@ diff --git a/gateway/session.py b/gateway/session.py
          if not isinstance(token, str) or not token:
              # The pair is written atomically; a partial/malformed pair must not auto-resume.
              token = started_at = None
-@@ -594,6 +607,7 @@ class SessionEntry:
+@@ -603,6 +616,7 @@ class SessionEntry:
              chat_type=data.get("chat_type", "dm"), metadata=dict(data.get("metadata") or {}),
              last_resume_marked_at=_parse_iso(data.get("last_resume_marked_at")),
              active_turn_token=token, active_turn_started_at=started_at,
@@ -90,7 +90,7 @@ diff --git a/gateway/session.py b/gateway/session.py
 diff --git a/gateway/session_lifecycle.py b/gateway/session_lifecycle.py
 --- a/gateway/session_lifecycle.py
 +++ b/gateway/session_lifecycle.py
-@@ -54,6 +54,37 @@ def auto_continue_freshness_window() -> float:
+@@ -55,6 +55,37 @@ def auto_continue_freshness_window() -> float:
          return float(_AUTO_CONTINUE_FRESHNESS_SECS_DEFAULT)
  
  
@@ -128,7 +128,7 @@ diff --git a/gateway/session_lifecycle.py b/gateway/session_lifecycle.py
  class SessionLifecycleMixin:
      """SessionStore explicit boundaries and crash-recovery markers."""
  
-@@ -111,12 +142,15 @@ class SessionLifecycleMixin:
+@@ -112,12 +143,15 @@ class SessionLifecycleMixin:
          """
          return self._update_entry(session_key, lambda e: setattr(e, "suspended", True))
  
@@ -144,27 +144,27 @@ diff --git a/gateway/session_lifecycle.py b/gateway/session_lifecycle.py
          candidate["active_turn_token"] = token
          candidate["active_turn_started_at"] = _iso(started_at)
 +        candidate["active_turn_pid"] = pid
-         if started_at is not None:
+         touched = _now() if started_at is not None else None
+         if touched is not None:
              # Keeps the legacy 120s startup heuristic working for an older binary during a rolling
-             # downgrade/upgrade window.
-@@ -124,6 +158,7 @@ class SessionLifecycleMixin:
+@@ -126,6 +160,7 @@ class SessionLifecycleMixin:
          self._save_entry(session_key, entry_data=candidate, lock_held=True)
          entry.active_turn_token = token
          entry.active_turn_started_at = started_at
 +        entry.active_turn_pid = pid
-         if started_at is not None:
-             entry.updated_at = started_at
+         if touched is not None:
+             entry.updated_at = touched
  
-@@ -136,7 +171,7 @@ class SessionLifecycleMixin:
-             entry = self._entry_locked(session_key)
-             if entry is None:
+@@ -140,7 +175,7 @@ class SessionLifecycleMixin:
                  return None
--            self._set_turn_marker_locked(session_key, entry, token, _now())
-+            self._set_turn_marker_locked(session_key, entry, token, _now(), os.getpid())
+             # Aware UTC, unlike the local wall clock elsewhere: the next process compares it with
+             # epoch transcript timestamps and may run in another zone (DST, container vs unit TZ).
+-            self._set_turn_marker_locked(session_key, entry, token, datetime.now(timezone.utc))
++            self._set_turn_marker_locked(session_key, entry, token, datetime.now(timezone.utc), os.getpid())
          return token
  
      def clear_turn_active(self, session_key: str, token: str) -> bool:
-@@ -146,7 +181,7 @@ class SessionLifecycleMixin:
+@@ -150,7 +185,7 @@ class SessionLifecycleMixin:
              entry = self._entry_locked(session_key)
              if entry is None or entry.active_turn_token != token:
                  return False
@@ -174,8 +174,8 @@ diff --git a/gateway/session_lifecycle.py b/gateway/session_lifecycle.py
  
      def recover_interrupted_turns(self, max_age_seconds: int = 60 * 60) -> int:
 @@ -170,6 +205,21 @@ class SessionLifecycleMixin:
-                 # Mixed aware/naive timestamps: clear rather than risk an unsafe old resume.
-                 marker_is_stale = True
+                 max_age_seconds > 0 and epoch_now - started_at.timestamp() > max_age_seconds
+             )
              if not marker_is_stale and not entry.suspended:
 +                if active_turn_owner_alive(entry):
 +                    # The previous gateway process is STILL RUNNING this turn
