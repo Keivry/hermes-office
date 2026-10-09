@@ -103,22 +103,60 @@ fi
 # The sidecar acts as a REST proxy between Hermes' ClawMem plugin and the
 # remote GGUF model server (embed / LLM / reranker).
 #
-# Guard: skip if the sidecar is already running (checked via /health).
+# Guard: skip if the sidecar is already listening.  "Listening" must not
+# mean "answered 200": ClawMem >= 0.43 enables serve-token auth by default,
+# so an unauthenticated /health probe gets 401 instead of 200.  Treating
+# 401 as dead would make this guard useless (every boot tries to start a
+# second instance) and turn a healthy sidecar into a scary boot warning.
+# Any HTTP answer — 2xx, 401, 403 or even 5xx — proves the port is owned.
 # This makes container restart / s6 service re-spawn safe.
+
+# Exit 0 when a clawmem listener owns 127.0.0.1:$CLAWMEM_SERVE_PORT.
+clawmem_listening() {
+    s6-setuidgid hermes python3 -c "
+import os, sys, urllib.request, urllib.error
+port = os.environ.get('CLAWMEM_SERVE_PORT', '7438')
+req = urllib.request.Request(f'http://127.0.0.1:{port}/health')
+try:
+    urllib.request.urlopen(req, timeout=1)
+    sys.exit(0)
+except urllib.error.HTTPError:
+    # Port is owned (token-protected or degraded) -- never start a second one.
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+"
+}
+
+# Wait up to 15 s for the sidecar to answer.  2xx = healthy; 401/403 =
+# healthy listener with serve-token auth on; 5xx = up but broken (keep waiting).
+clawmem_wait_healthy() {
+    s6-setuidgid hermes python3 -c "
+import os, sys, time, urllib.request, urllib.error
+port = os.environ.get('CLAWMEM_SERVE_PORT', '7438')
+for _ in range(30):
+    req = urllib.request.Request(f'http://127.0.0.1:{port}/health')
+    try:
+        urllib.request.urlopen(req, timeout=1)
+        sys.exit(0)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            print('[office-setup] ClawMem sidecar up (HTTP %d, serve-token auth enabled)' % e.code)
+            sys.exit(0)
+    except Exception:
+        pass
+    time.sleep(0.5)
+sys.exit(1)
+"
+}
+
 if [ "${HERMES_CLAWMEM_AUTOSTART_SERVE:-true}" = "true" ] && [ -x "${CLAWMEM_BIN:-/usr/local/bin/clawmem}" ]; then
     port="${CLAWMEM_SERVE_PORT:-7438}"
 
-    # Pre-flight: is the sidecar already responding?
-    if ! s6-setuidgid hermes python3 -c "
-import os, sys, urllib.request
-port = os.environ.get('CLAWMEM_SERVE_PORT', '7438')
-try:
-    req = urllib.request.Request(f'http://127.0.0.1:{port}/health')
-    urllib.request.urlopen(req, timeout=1)
-    sys.exit(0)
-except:
-    sys.exit(1)
-"; then
+    # Pre-flight: is the sidecar already listening?
+    if clawmem_listening; then
+        echo "[office-setup] ClawMem sidecar already listening on 127.0.0.1:${port}; skipping start"
+    else
         # Ensure the runtime log directory exists
         mkdir -p "$HERMES_HOME/runtime/clawmem/debug"
 
@@ -131,18 +169,7 @@ except:
             >"$HERMES_HOME/runtime/clawmem/debug/serve.log" 2>&1 &
 
         # Wait up to 15 s for the sidecar to become healthy
-        s6-setuidgid hermes python3 -c "
-import os, sys, time, urllib.request
-port = os.environ.get('CLAWMEM_SERVE_PORT', '7438')
-for _ in range(30):
-    try:
-        req = urllib.request.Request(f'http://127.0.0.1:{port}/health')
-        urllib.request.urlopen(req, timeout=1)
-        sys.exit(0)
-    except:
-        time.sleep(0.5)
-sys.exit(1)
-" || echo "[office-setup] Warning: ClawMem sidecar did not become healthy within 15 s; continuing"
+        clawmem_wait_healthy || echo "[office-setup] Warning: ClawMem sidecar did not become healthy within 15 s; continuing"
     fi
 fi
 
