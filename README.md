@@ -43,6 +43,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
   1. install exact pinned CPU wheels for `torch==2.14.1+cpu` and `torchvision==0.29.1+cpu`
   2. install `docling==2.135.0` from the normal Python package index
 - The upstream Hermes base image keeps `[tool.uv] exclude-newer = "14 days"` in `/opt/hermes/pyproject.toml`; the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs
+- Since base `v0.21.6` the base image deliberately keeps `uv` off `PATH` (its PM store resolves the pinned binary for dependency preparation only); the Dockerfile re-exposes that same binary via a `/usr/local/bin/uv` symlink for the build and drops the shim once the tool venvs are assembled, so the published image ships no installer on `PATH`
 - Current image installs the base `docling` package (not the optional VLM extras)
 
 ### pdfcpu
@@ -64,7 +65,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 - Added because ClawMem requires Bun at runtime
 
 ### ClawMem
-- Installed globally as `clawmem` at `/usr/local/bin/clawmem`
+- Installed globally as `clawmem` at `/usr/local/bin/clawmem` (installed with npm `--prefix /usr/local`; the base image resolves `node` out of its own PM store, so npm's implicit global prefix no longer points at `/usr/local`)
 - Current pinned version in `Dockerfile`: `0.43.1`
 - The Hermes memory provider plugin is staged under `/opt/tools/clawmem-plugin`
 - On container start, the s6 cont-init.d hook syncs that plugin into `$HERMES_HOME/plugins/clawmem`
@@ -334,7 +335,7 @@ docling report.pdf --format json -o report.json
 Typical usage:
 
 ```bash
-node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)'
+node -e 'const fs=require("fs"); const pkg=JSON.parse(fs.readFileSync("/usr/local/lib/node_modules/clawmem/package.json","utf8")); console.log(`clawmem ${pkg.version}`)'
 clawmem doctor
 clawmem status
 clawmem collection list

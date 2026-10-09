@@ -118,16 +118,29 @@ RUN curl -fsSL "${SQLITE_ASSET_URL}" -o /tmp/sqlite-tools.zip \
     && rm -rf /tmp/sqlite-tools.zip /tmp/sqlite-tools \
     && sqlite3 --version
 
-# No --unsafe-perm: npm 12 removed that flag and now hard-errors on unknown CLI
-# flags (EUNKNOWNCONFIG) instead of ignoring them, which killed the build from
-# the v0.21.6 base onward. It was never needed here anyway -- npm >= 7 runs
-# lifecycle scripts as root by default, and clawmem ships no install/postinstall
-# script (only dev/test/inspector).
-RUN npm install -g --no-fund --no-audit "clawmem@${CLAWMEM_VERSION}" \
-    && node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)'
+# npm 12 (the v0.21.6 base) removed --unsafe-perm and now hard-errors on
+# unknown CLI flags (EUNKNOWNCONFIG) instead of ignoring them. It was never
+# needed here anyway: npm >= 7 runs lifecycle scripts as root by default, and
+# clawmem ships no install/postinstall script of its own.
+#
+# --prefix /usr/local pins the global tree exactly where this image's ENV and
+# PATH expect it (/usr/local/bin/clawmem). The v0.21.6 base resolves node
+# through a symlink into its PM store (/opt/hermes/tools/node-*/bin/node), so
+# npm's implicit global prefix follows that store -- a directory that is not on
+# the image PATH -- and a bare `-g` install would drop the clawmem CLI where
+# neither CLAWMEM_BIN nor PATH can reach it. Asserted below, so it cannot
+# regress silently again.
+#
+# --allow-scripts re-enables the one dependency install script npm 12 blocks by
+# default (npm 11, in the previous base, ran it): node-llama-cpp's postinstall
+# resolves the llama.cpp native binaries ClawMem loads when local models are on.
+RUN npm install -g --prefix /usr/local --no-fund --no-audit \
+        --allow-scripts=node-llama-cpp "clawmem@${CLAWMEM_VERSION}" \
+    && test -x /usr/local/bin/clawmem \
+    && node -e 'const fs=require("fs"); const pkg=JSON.parse(fs.readFileSync("/usr/local/lib/node_modules/clawmem/package.json","utf8")); console.log(`clawmem ${pkg.version}`)'
 
 RUN mkdir -p /opt/tools /opt/tools/clawmem-plugin \
-    && CLAWMEM_NODE_ROOT="$(npm root -g)" \
+    && CLAWMEM_NODE_ROOT=/usr/local/lib/node_modules \
     && curl -fsSL "${PPT_MASTER_ARCHIVE_URL}" -o /tmp/ppt-master.tar.gz \
     && tar -xzf /tmp/ppt-master.tar.gz -C /opt/tools \
     && mv "/opt/tools/ppt-master-${PPT_MASTER_VERSION#v}" /opt/tools/ppt-master \
@@ -139,6 +152,18 @@ RUN mkdir -p /opt/tools /opt/tools/clawmem-plugin \
 # make it writable so rtk-hermes and future pip-installed plugins
 # can be added under USER hermes.
 RUN chown -R hermes:hermes /opt/hermes/.venv
+
+# The v0.21.6 base deliberately keeps uv off PATH: PM resolves the pinned uv
+# (0.12.3, in its own store) and hands build consumers Python environments,
+# not installer executables -- /usr/local/bin gets node, npm and python3 but
+# never uv. This image assembles its own tool venvs, so re-expose that same
+# pinned binary through the same mechanism the base uses (a /usr/local/bin
+# symlink) for the build only. The last uv consumer below removes it again, so
+# the published image keeps upstream's "no installer on PATH" shape.
+RUN UV_BIN="$(python3 -c 'import sys; sys.path.insert(0, "/opt/hermes"); from pm import installed_package; print(installed_package("uv").binary)')" \
+    && test -x "$UV_BIN" \
+    && ln -sf "$UV_BIN" /usr/local/bin/uv \
+    && uv --version
 
 # Install rtk-hermes into Hermes venv as root (venv may be root-owned in v0.18.0 base)
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
@@ -411,8 +436,10 @@ RUN cd /tmp \
     && uv pip install --python /opt/tools/docling/.venv/bin/python --no-cache-dir \
         "docling==${DOCLING_VERSION}"
 
-# Root-owned venv files under /opt/tools — chown to hermes for runtime access
-RUN chown -R hermes:hermes /opt/tools
+# Root-owned venv files under /opt/tools — chown to hermes for runtime access.
+# This is the last uv consumer in the build, so drop the build-only uv shim.
+RUN chown -R hermes:hermes /opt/tools \
+    && rm -f /usr/local/bin/uv
 
 ENV OFFICECLI_SKIP_UPDATE=1
 ENV PPT_MASTER_HOME=/opt/tools/ppt-master
@@ -436,7 +463,9 @@ RUN /opt/tools/ppt-master/.venv/bin/python --version \
     && /opt/tools/docling/.venv/bin/python --version \
     && /opt/tools/docling/.venv/bin/docling --version \
     && bun --version \
-    && node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)' \
+    && test -x "${CLAWMEM_BIN}" \
+    && test -f /opt/tools/clawmem-plugin/plugin.yaml \
+    && node -e 'const fs=require("fs"); const pkg=JSON.parse(fs.readFileSync("/usr/local/lib/node_modules/clawmem/package.json","utf8")); console.log(`clawmem ${pkg.version}`)' \
     && rtk --version \
     && gh --version \
     && git lfs version \
