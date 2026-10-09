@@ -118,7 +118,12 @@ RUN curl -fsSL "${SQLITE_ASSET_URL}" -o /tmp/sqlite-tools.zip \
     && rm -rf /tmp/sqlite-tools.zip /tmp/sqlite-tools \
     && sqlite3 --version
 
-RUN npm install -g --unsafe-perm --no-fund --no-audit "clawmem@${CLAWMEM_VERSION}" \
+# No --unsafe-perm: npm 12 removed that flag and now hard-errors on unknown CLI
+# flags (EUNKNOWNCONFIG) instead of ignoring them, which killed the build from
+# the v0.21.6 base onward. It was never needed here anyway -- npm >= 7 runs
+# lifecycle scripts as root by default, and clawmem ships no install/postinstall
+# script (only dev/test/inspector).
+RUN npm install -g --no-fund --no-audit "clawmem@${CLAWMEM_VERSION}" \
     && node -e 'const fs=require("fs"), path=require("path"), cp=require("child_process"); const root=cp.execSync("npm root -g", {encoding:"utf8"}).trim(); const pkg=JSON.parse(fs.readFileSync(path.join(root, "clawmem", "package.json"), "utf8")); console.log(`clawmem ${pkg.version}`)'
 
 RUN mkdir -p /opt/tools /opt/tools/clawmem-plugin \
