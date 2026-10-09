@@ -157,8 +157,20 @@ if [ "${HERMES_CLAWMEM_AUTOSTART_SERVE:-true}" = "true" ] && [ -x "${CLAWMEM_BIN
     if clawmem_listening; then
         echo "[office-setup] ClawMem sidecar already listening on 127.0.0.1:${port}; skipping start"
     else
-        # Ensure the runtime log directory exists
-        mkdir -p "$HERMES_HOME/runtime/clawmem/debug"
+        # Ensure the runtime log directory AND the ClawMem state tree exist.
+        # A brand-new $HERMES_HOME (fresh volume, first deployment) has
+        # neither, and clawmem serve then dies during startup with
+        #   SQLiteError: unable to open database file (SQLITE_CANTOPEN)
+        # so the sidecar never binds and the wait below can only warn.
+        # Create them as root and hand them to hermes (the sidecar runs as
+        # hermes and must be able to write its index + session store).
+        # Non-recursive chown: only the directories this hook owns, so an
+        # existing state tree is never walked on every boot.
+        state_dir="$HERMES_HOME/state/clawmem"
+        runtime_dir="$HERMES_HOME/runtime/clawmem/debug"
+        mkdir -p "$state_dir/sessions" "$runtime_dir"
+        chown hermes:hermes "$state_dir" "$state_dir/sessions" "$runtime_dir" 2>/dev/null || \
+            echo "[office-setup] Warning: chown ClawMem state dirs failed (rootless container?)"
 
         # Start the sidecar as hermes (not root) so file ownership is
         # correct for any state it writes under $HERMES_HOME.
