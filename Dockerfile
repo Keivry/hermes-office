@@ -179,9 +179,11 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
 #
-# As of v0.21.6 the roster is 8 patches. (This line said 7 through the v2026.9.24
-# sweep -- already stale then, because 031/032 were added without updating it; the
-# real file count at that tag was 9. The v0.21.6 sweep corrects it to 8.)
+# As of v0.21.6 the roster is 9 patches: the 8 the sweep left, plus 033, added the
+# same day against the same tag (see its block below -- a bug the sweep did not cover).
+# (This line said 7 through the v2026.9.24 sweep -- already stale then, because 031/032
+# were added without updating it; the real file count at that tag was 9. The v0.21.6
+# sweep corrected it to 8.)
 # 17 were retired at v2026.9.11 (v0.21.2):
 # 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
 # timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the
@@ -282,6 +284,27 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # zero fuzz, zero .rej/.orig, all 13 touched files byte-identical to the authored tree,
 # py_compile + compileall(agent/gateway/tools/hermes_cli) clean, and 38 functional
 # assertions across 007/011/014/015/016/018/032 on the freshly applied tree.
+#
+# 033 ADDED same day (2026-10-09), after the sweep above, roster 8 -> 9: v0.21.6 turned
+# enabled plugins into uv workspace members, and pm/workspace.py::_workspace_member()
+# writes `[project] name = hermes-plugin-<key>` onto a "virtual" member (no
+# [build-system], no tool.uv.package) without ever ensuring a `version`. hermes-lcm
+# ships a tooling-only pyproject.toml (only [tool.ruff], no [project] at all), so the
+# generated member had a [project] table with a name and no version and uv refused the
+# WHOLE workspace: "uv lock exited 2: ... the required project.version field is neither
+# set nor present in the project.dynamic list". Every plugin enable/install/update in
+# the home then fails with AdmissionRefused, and the left-core migration could not
+# install the Home Assistant plugin, leaving `platform 'homeassistant' references
+# unknown toolset 'hermes-homeassistant'` behind it. 033 gives the generated virtual
+# member the same "0.0.0" placeholder the manifest-only branch already writes, unless
+# the plugin declares a static or dynamic version. Local fix: upstream main carries the
+# same code (diffed 2026-10-09), so there is nothing to cite upstream yet.
+# Verified: `patch -p1` rc=0 on a pristine 818c13be tree (no fuzz, no .rej/.orig,
+# py_compile + check_structure clean), and end-to-end in
+# ghcr.io/keivry/hermes-office:latest with the file bind-mounted over the image copy:
+# `hermes plugins enable hermes-lcm` fails with the production error without it and
+# completes (lock + install + enable) with it, generating a member pyproject carrying
+# name + version = "0.0.0".
 # Previous sweeps:
 # v2026.9.14 / v0.21.3: roster stayed at 8; 7 of 8 re-applied offset-only and
 #   014 was re-anchored (upstream inserted reasoning_config={"enabled": False}

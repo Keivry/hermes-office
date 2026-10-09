@@ -1,0 +1,66 @@
+# 033-pm-workspace-member-version.patch
+#
+# Local patch — NOT an upstream PR. As of 2026-10-09 upstream main carries the same
+# `_workspace_member()` body as v0.21.6 (read from
+# https://raw.githubusercontent.com/NousResearch/hermes-agent/main/pm/workspace.py), so
+# there is no issue or PR to cite; the gap is still open upstream.
+#
+# Why: v0.21.6 made enabled plugins uv workspace members (pm/workspace.py). For a plugin
+# that ships no [build-system] and no `[tool.uv] package = true` — a "virtual" member —
+# _workspace_member() snapshots the plugin into plugin-sources/<name>-<hash>/ and rewrites
+# its pyproject.toml so the member carries the unique key in [project].name (two homes
+# enabling the same plugin would otherwise declare one uv member name twice). It never
+# ensures a `version`.
+#
+# A plugin whose pyproject.toml is tooling-only and declares no [project] table at all —
+# hermes-lcm ships exactly that, `[tool.ruff]` plus a comment that it "intentionally
+# declares no [build-system] or project metadata" — therefore gets an *empty* [project]
+# table from the setdefault plus a name, and uv rejects the entire workspace:
+#
+#   uv lock exited 2: error: Failed to parse: `plugin-sources/hermes-lcm-<hash>/pyproject.toml`
+#     Caused by: TOML parse error at line 15, column 1
+#       `pyproject.toml` is using the `[project]` table, but the required
+#       `project.version` field is neither set nor present in the `project.dynamic` list
+#
+# One such plugin poisons every lock in the home, so no plugin can be enabled, installed
+# or updated (AdmissionRefused: venv: uv lock exited 2 — the "Resolving Python
+# dependencies" failure), and the left-core migration cannot install the Home Assistant
+# plugin, which leaves `platform 'homeassistant' references unknown toolset
+# 'hermes-homeassistant'` in its wake.
+#
+# After: a generated virtual member gets the same version placeholder the manifest-only
+# branch below already writes ("0.0.0") when the plugin declares neither a static nor a
+# dynamic version. Members that declare either are left untouched, and a buildable member
+# (build-system present, or tool.uv.package = true) never reaches this branch.
+#
+# Runtime files only: pm/workspace.py
+#
+# Verified 2026-10-09 against a pristine v0.21.6 checkout (real `patch -p1` rc=0, no
+# .rej/.orig, py_compile clean) and end-to-end inside ghcr.io/keivry/hermes-office:latest
+# with this file bind-mounted over /opt/hermes/pm/workspace.py, on an isolated HERMES_HOME
+# with hermes-lcm installed:
+#   without it  -> `hermes plugins enable hermes-lcm` fails with the uv lock error above
+#                  (reproduces the production log verbatim, same member hash)
+#   with it     -> `Resolving Python dependencies` / `Installing Python dependencies` both
+#                  succeed, the plugin enables, and the generated
+#                  plugin-sources/hermes-lcm-<hash>/pyproject.toml carries
+#                  `name = "hermes-plugin-hermes-lcm-<hash>"` + `version = "0.0.0"`.
+diff --git a/pm/workspace.py b/pm/workspace.py
+index 241988c1..b46c33cb 100644
+--- a/pm/workspace.py
++++ b/pm/workspace.py
+@@ -283,6 +283,14 @@ def _workspace_member(plugin_dir: Path, root: Path, *, identity: Path) -> Path:
+                 changed = True
+         if virtual:
+             document.setdefault("project", {})["name"] = f"hermes-plugin-{key}"
++            # uv rejects a workspace member whose [project] table has no version and
++            # does not declare one dynamic. A plugin that ships a lint/tooling-only
++            # pyproject.toml (no [project] at all) gets an empty table from the
++            # setdefault above, so give it the same placeholder the manifest-only
++            # path below uses -- unless it already declares (or generates) one.
++            project = document["project"]
++            if "version" not in project and "version" not in project.get("dynamic", []):
++                project["version"] = "0.0.0"
+         if virtual or changed:
+             import tomli_w
+ 
