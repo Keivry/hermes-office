@@ -156,11 +156,15 @@ RUN chown -R hermes:hermes /opt/hermes/.venv
 # The v0.21.6 base deliberately keeps uv off PATH: PM resolves the pinned uv
 # (0.12.3, in its own store) and hands build consumers Python environments,
 # not installer executables -- /usr/local/bin gets node, npm and python3 but
-# never uv. This image assembles its own tool venvs, so re-expose that same
-# pinned binary through the same mechanism the base uses (a /usr/local/bin
-# symlink) for the build only. The last uv consumer below removes it again, so
+# never uv. This image assembles its own third-party tool venvs under
+# /opt/tools, so re-expose that same pinned binary through the same mechanism
+# the base uses (a /usr/local/bin symlink) for the build only.
+#
+# pm.uv_launcher() is PM's read-only accessor for that binary; the obvious
+# installed_package("uv") refuses it ("uv is internal PM tooling, not an
+# application package"). The last uv consumer below removes the shim again, so
 # the published image keeps upstream's "no installer on PATH" shape.
-RUN UV_BIN="$(python3 -c 'import sys; sys.path.insert(0, "/opt/hermes"); from pm import installed_package; print(installed_package("uv").binary)')" \
+RUN UV_BIN="$(python3 -c 'import sys; sys.path.insert(0, "/opt/hermes"); from pm import uv_launcher; print(uv_launcher("uv") or "")')" \
     && test -x "$UV_BIN" \
     && ln -sf "$UV_BIN" /usr/local/bin/uv \
     && uv --version
