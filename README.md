@@ -22,14 +22,14 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.152`
+- Current pinned version in `Dockerfile`: `v1.0.155`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
 - `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
-- Current pinned version in `Dockerfile`: `v6.6.0`
+- Current pinned version in `Dockerfile`: `v6.7.0`
 
 ### ImageMagick
 - Installed from the distro package as `imagemagick`
@@ -38,16 +38,16 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.130.0`
+- Current pinned version in `Dockerfile`: `2.135.0`
 - Installed in two steps for stability:
-  1. install exact pinned CPU wheels for `torch==2.14.0+cpu` and `torchvision==0.29.0+cpu`
-  2. install `docling==2.130.0` from the normal Python package index
+  1. install exact pinned CPU wheels for `torch==2.14.1+cpu` and `torchvision==0.29.1+cpu`
+  2. install `docling==2.135.0` from the normal Python package index
 - The upstream Hermes base image keeps `[tool.uv] exclude-newer = "14 days"` in `/opt/hermes/pyproject.toml`; the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs
 - Current image installs the base `docling` package (not the optional VLM extras)
 
 ### pdfcpu
 - Installed as a standalone binary at `/usr/local/bin/pdfcpu`
-- Current pinned version in `Dockerfile`: `0.15.0`
+- Current pinned version in `Dockerfile`: `0.16.1`
 - Best suited for open-source PDF CLI operations such as merge, split, validate, optimize, watermark, rotate, forms, and image extraction
 
 ### qpdf
@@ -65,7 +65,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 
 ### ClawMem
 - Installed globally as `clawmem` at `/usr/local/bin/clawmem`
-- Current pinned version in `Dockerfile`: `0.39.0`
+- Current pinned version in `Dockerfile`: `0.43.1`
 - The Hermes memory provider plugin is staged under `/opt/tools/clawmem-plugin`
 - On container start, the s6 cont-init.d hook syncs that plugin into `$HERMES_HOME/plugins/clawmem`
 - The image defaults to **external-model / remote-GPU** style operation:
@@ -208,7 +208,7 @@ If another service already owns `9089` (for example Qwen3.5), either move that s
 
 ### What's in this image
 
-- **RTK binary** at `/usr/local/bin/rtk` — pinned to `v0.50.0` (musl static binary)
+- **RTK binary** at `/usr/local/bin/rtk` — pinned to `v0.51.0` (musl static binary)
 - **rtk-hermes plugin** (`ogallotti/rtk-hermes` v1.2.3) — installed into Hermes' Python venv and auto-enabled in `config.yaml` via the s6 cont-init.d hook
 
 The Hermes plugin automatically rewrites terminal commands through `rtk` *before* execution, so the agent gets token-compressed output without any manual `rtk` prefix needed.

@@ -2,63 +2,61 @@
 #
 # Local patch — NOT an upstream PR. Upstream has neither an issue nor a PR for this gap: searches
 # for "gateway skills diff", "truncated diff chat" and "pending diff attachment" all return zero
-# results. It is the second half of the /skills diff problem 031 only partly fixes.
+# results. It is the second half of the /skills diff problem 031 addressed (031 is retired as of the
+# v0.21.6 sweep: upstream b46f182f8 renders per-op batch diffs natively).
 #
-# Why: gateway/slash_commands.py hard-coded a flat 3000-character cap on /skills diff output for
+# Why: gateway/slash_commands.py hard-codes a flat 3000-character cap on /skills diff output for
 # every platform, while the delivery adapters each declare a much larger single-message limit
-# (Matrix _SPLIT_THRESHOLD 15900, Feishu 4000). The cap was invisible while bug #105399 made batch
-# records render as "(batch on '')"; once 031 makes a staged batch render in full (a 2-op record is
-# ~6.6 KB), the flat cap converts "empty render" into "truncated at 3000" on the one platform that
-# can carry the whole thing in a single message.
+# (Matrix _SPLIT_THRESHOLD 15900, Feishu 4000, Discord 1900). Upstream renders a staged batch as one
+# block per operation (~6.6 KB for a 2-op record), so on the one platform that can carry the whole
+# thing in a single message the flat cap turns a complete render into "truncated at 3000".
 #
-# Same block also pointed users at a path that does not exist: it told them the full diff was in
+# The same block also points users at a path that does not exist: the note says the full diff is in
 # ~/.hermes/pending/skills/<id>.json, but the real location is $HERMES_HOME/pending/skills/<id>.json,
-# so following the instruction found nothing.
+# so following the instruction finds nothing. v0.21.6 moved that sentence into the locale files
+# (locales/*.yaml -> gateway.skills.diff_truncated) while keeping the hard-coded path, so this patch
+# post-processes the rendered note and re-points it at the file that actually exists.
 #
 # After: _skill_diff_char_budget() reads the delivery adapter's own _SPLIT_THRESHOLD — the exact size
 # at which the adapter would start chunking — falling back to max_message_length - 100 and then to
-# the historical 3000. The truncation note prints the real pending path via
-# write_approval._pending_path(). Widening only: max(3000, adapter_limit), so no platform is ever
-# handed a smaller diff than it got before and the fallback path is unchanged.
+# the historical 3000. Widening only: max(3000, adapter_limit), so no platform is ever handed a
+# smaller diff than it got before and the fallback path is unchanged.
 #
 # Runtime files only: gateway/slash_commands.py
 #
-# Verified against a pristine v2026.9.24 (f97608f) checkout with 007-018 + 031 applied first:
-# patch -p1 rc=0, py_compile clean, and an AST shape assertion proving the new helper landed in the
-# class body (GatewaySlashCommandsMixin 47 -> 48 methods, top-level function set unchanged) — a
-# mis-indented insertion there would silently nest every following method and still pass py_compile.
+# Verified against a pristine v0.21.6 (818c13be) checkout with 007/008/011/014/015/016/018 applied
+# first: patch -p1 rc=0, py_compile clean, an AST shape assertion proving the new helper landed in
+# the class body (GatewaySlashCommandsMixin 48 -> 49 methods, top-level function set unchanged) — a
+# mis-indented insertion there would silently nest every following method and still pass py_compile —
+# and a functional check of the budget resolver over 8 adapter shapes (matrix 15900, feishu 4000,
+# discord 1900 -> floor 3000, max_message_length - 100 fallback, wrong types, missing adapter).
 diff --git a/gateway/slash_commands.py b/gateway/slash_commands.py
+index fec82390..67250add 100644
 --- a/gateway/slash_commands.py
 +++ b/gateway/slash_commands.py
-@@ -907,7 +907,7 @@ class GatewaySlashCommandsMixin(
-     async def _handle_skills_command(self, event: MessageEvent) -> str:
-         """Handle /skills on the gateway — pending skill-write review only (hub stays CLI-only). Gated
-         by ``skills.write_approval`` but still answers when staged writes exist after the gate is off
--        (never stranded). ``diff`` is truncated for chat."""
-+        (never stranded). ``diff`` is truncated to the platform's outbound budget."""
-         from hermes_cli.write_approval_commands import handle_pending_subcommand
-         from tools import write_approval as wa
-         args = event.get_command_args().strip().split()
-@@ -926,13 +926,44 @@ class GatewaySlashCommandsMixin(
+@@ -914,11 +914,49 @@ class GatewaySlashCommandsMixin(
  
          # Chat bubbles can't hold a full skill diff — truncate and point at the pending JSON file
          # (NOT `hermes skills diff <name>`, which diffs a bundled skill against its stock version).
 -        if sub == "diff" and len(out) > 3000:
 -            pending_id = args[1] if len(args) > 1 else "<id>"
--            out = (out[:3000]
--                   + "\n… (truncated — full diff in "
--                     f"~/.hermes/pending/skills/{pending_id}.json)")
-+        # The budget is the platform's OWN outbound limit, not a flat 3000: a staged batch renders one
-+        # block per operation and routinely overflows 3000 on a platform that carries the whole thing
-+        # in a single message (Matrix: 15900). Widening only — never below 3000 — so no platform is
-+        # ever handed a smaller diff than it got before.
+-            out = out[:3000] + t("gateway.skills.diff_truncated", pending_id=pending_id)
++        # The budget is the platform's OWN outbound limit, not a flat 3000: a staged batch renders
++        # one block per operation and routinely overflows 3000 on a platform that carries the whole
++        # thing in a single message (Matrix: 15900). Widening only — never below 3000 — so no
++        # platform is ever handed a smaller diff than it got before.
 +        if sub == "diff":
 +            budget = self._skill_diff_char_budget(event)
 +            if len(out) > budget:
 +                pending_id = args[1] if len(args) > 1 else "<id>"
-+                out = (out[:budget]
-+                       + "\n… (truncated — full diff in "
-+                         f"{wa._pending_path(wa.SKILLS, pending_id)})")
++                # The i18n note names a hard-coded ~/.hermes/pending/skills/<id>.json, which does
++                # not exist whenever HERMES_HOME is something other than ~/.hermes, so following
++                # it finds nothing. Point it at the file that is actually there.
++                note = t("gateway.skills.diff_truncated", pending_id=pending_id)
++                out = out[:budget] + note.replace(
++                    f"~/.hermes/pending/skills/{pending_id}.json",
++                    str(wa._pending_path(wa.SKILLS, pending_id)),
++                )
          return out
  
 +    # Floor for _skill_diff_char_budget: the historical flat cap, kept so widening the budget can
@@ -88,4 +86,4 @@ diff --git a/gateway/slash_commands.py b/gateway/slash_commands.py
 +
      async def _handle_approvals_command(self, event: MessageEvent) -> str:
          """Show or persist the profile-wide dangerous-command approval mode."""
-         from gateway.slash_access import policy_for_source
+         from gateway.slash_access import policy_for_runner_source

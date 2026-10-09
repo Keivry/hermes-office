@@ -1,27 +1,27 @@
-ARG HERMES_AGENT_VERSION=v2026.9.24
+ARG HERMES_AGENT_VERSION=v0.21.6
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.152
+ARG OFFICECLI_VERSION=v1.0.155
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
-ARG PPT_MASTER_VERSION=v6.6.0
+ARG PPT_MASTER_VERSION=v6.7.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.130.0
-ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.14.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=160e1bc46aeded3111d2801f8ae10dc9a1b946843a7e126b4dbf5e19c5706e95
-ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.29.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=6ff3b816ec955f3ef9f32d1e698e1856549e2e03637c358ee067c6f5f17f74fa
-ARG PDFCPU_VERSION=0.15.0
+ARG DOCLING_VERSION=2.135.0
+ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=331fa474e26e428e2e6af1143b2fdab19cee492d7d21897b8899ce1c14755662
+ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.29.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=7b27accfa545169ad070efb8a6679b25d63acc8513bbc0c05937c3ce94c13ea5
+ARG PDFCPU_VERSION=0.16.1
 ARG PDFCPU_ASSET_URL=https://github.com/pdfcpu/pdfcpu/releases/download/v${PDFCPU_VERSION}/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64.tar.xz
 ARG BUN_VERSION=1.4.2
 ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
-ARG CLAWMEM_VERSION=0.39.0
-ARG RTK_VERSION=v0.50.0
+ARG CLAWMEM_VERSION=0.43.1
+ARG RTK_VERSION=v0.51.0
 ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
-ARG GH_VERSION=v2.101.0
-ARG GH_ASSET=gh_2.101.0_linux_amd64.tar.gz
+ARG GH_VERSION=v2.102.0
+ARG GH_ASSET=gh_2.102.0_linux_amd64.tar.gz
 ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH_ASSET}
 # Official sqlite3 CLI matching the base image's bundled libsqlite3 3.53.4 in
 # /usr/local/lib. Debian's /usr/bin/sqlite3 (compiled against 3.46.1) resolves
@@ -145,7 +145,9 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
 #
-# As of v2026.9.24 (v0.21.5) the roster is 7 patches (was 8 at v2026.9.14).
+# As of v0.21.6 the roster is 8 patches. (This line said 7 through the v2026.9.24
+# sweep -- already stale then, because 031/032 were added without updating it; the
+# real file count at that tag was 9. The v0.21.6 sweep corrects it to 8.)
 # 17 were retired at v2026.9.11 (v0.21.2):
 # 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
 # timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the
@@ -201,6 +203,51 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # all 12 touched files py_compile clean, per-patch markers present, plus a functional
 # check of 018 (custom:opencode -> True, commandcode -> False, x-opencode-session
 # merged, oneshot- fallback intact, unrelated custom provider untouched).
+#
+# 2026-10-09 sweep (v0.21.6): roster 9 -> 8. This tag is the first patch rollup from
+# upstream's new stable pipeline -- 2,106 merged PRs / 8,867 non-merge commits / 8,342
+# changed files -- and the curated notes are deferred to v0.22.0, so drift was checked,
+# not assumed: (a) every patch real-applied to a pristine checkout of the tag in
+# lexicographic order, (b) upstream issue/PR state plus merge-commit ancestry vs
+# v0.21.6, (c) each flagged bug still present in the tagged source, (d) a functional
+# check per patch on the freshly applied tree.
+# 031 RETIRED: upstream b46f182f8 "fix(skills): render per-op diffs for staged batch
+#   skill writes" landed the same fix and goes further -- _batch_pending_diff() also
+#   renders each op against what the previous op left staged, which 031 did not. The
+#   PR 031 cited (#99722) is still OPEN, which is exactly why this sweep checks the
+#   source and the ancestry instead of the issue state.
+# 016 KEPT and REWRITTEN: the checkpoint refactor moved gc into
+#   checkpoint_pruning.Pruner.reclaim(), which recreates refs/heads + branches -- but
+#   only AFTER a `_git()` call that RAISES on failure. A failed or timed-out gc
+#   (upstream documents gc being killed by the store timeout) therefore skips the
+#   repair and leaves the store unusable forever: every later command, including the
+#   next prune's gc, dies with `fatal: not a git repository`, so the repair can never
+#   run again. The old _gc_store() called _repair_bare_repo_dirs() through a _run_git()
+#   that never raised, so the refactor made this strictly more fragile. 016 re-adds
+#   _repair_bare_repo_dirs() (upstream deleted it) and keeps both the proactive repair
+#   and the retry-on-fatal. Mechanism verified, not copied: git needs HEAD + objects/ +
+#   refs/ to treat a directory as a repository, removing refs/ reproduces the exact
+#   fatal this deployment logged (errors.log.2, 2026-08-21), the repair's
+#   mkdir(parents=True) on refs/heads also restores refs/, and _run_git recovers.
+# 015 KEPT: DEFAULT_EXCLUDES still lacks node-compile-cache/ and info/exclude is still
+#   written only at store init, so a pre-existing store never picks the pattern up.
+#   Re-anchored onto v0.21.6's reformatted DEFAULT_EXCLUDES (comment-per-group) and the
+#   reshaped _init_store.
+# 011 KEPT: #85207/#85285 still OPEN. Upstream added its own active_turn_token /
+#   active_turn_started_at pairing, but recover_interrupted_turns() promotes a FRESH
+#   marker to resume_pending without ever asking whether the owning process is alive,
+#   so the detached-restart double loop 011 closes is still reachable. Re-anchored onto
+#   the new _set_turn_marker_locked signature (the old hunks needed fuzz 2).
+# 032 KEPT: still a flat `len(out) > 3000` cap in gateway/slash_commands.py, and the
+#   truncation note now lives in locales/*.yaml with the same wrong hard-coded
+#   ~/.hermes/pending/skills/<id>.json path. Re-anchored to post-process that i18n note.
+# 007/008/014/018 unchanged in substance: #77100 CLOSED-not-merged, #44347 OPEN,
+#   #85713 OPEN, and 018 is office-specific -- re-checked against the tagged source.
+#   All four re-applied offset-only.
+# Verified on the v0.21.6 bump: 8 x `patch -p1` on a pristine 818c13be tree -> rc=0,
+# zero fuzz, zero .rej/.orig, all 13 touched files byte-identical to the authored tree,
+# py_compile + compileall(agent/gateway/tools/hermes_cli) clean, and 38 functional
+# assertions across 007/011/014/015/016/018/032 on the freshly applied tree.
 # Previous sweeps:
 # v2026.9.14 / v0.21.3: roster stayed at 8; 7 of 8 re-applied offset-only and
 #   014 was re-anchored (upstream inserted reasoning_config={"enabled": False}
@@ -239,6 +286,12 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   added a `transport_profile` argument to the SessionEntry(...) constructor,
 #   which drifted only hunk #4's trailing context (the single
 #   `model_override=..., **plain` line became three).
+#   RE-ANCHORED AGAIN on the v0.21.6 bump: upstream grew its own turn-marker
+#   pair and `_set_turn_marker_locked` now takes (session_key, entry, token,
+#   started_at) with an aware-UTC timestamp, and the auto-resume freshness test
+#   became `_is_fresh_gateway_interruption(...)`. Both are context-only drifts
+#   for 011 -- the old patch still applied, but with fuzz 2 on two hunks, which
+#   is why it was regenerated rather than shipped as-is.
 # 014 = upstream #82816/#85713 (open): title_generator unconditionally sent
 #   OpenAI-only response_format json_schema strict -> Console Go / DeepSeek /
 #   Anthropic all 400 ("This response_format type is unavailable now") on every
@@ -256,18 +309,32 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   with Permission denied (rc=128) and affected workdirs get zero checkpoints.
 #   Adds the exclude + _ensure_store_excludes() so existing stores also pick it
 #   up. Trimmed to tools/checkpoint_manager.py (PR tests excluded). Keep until
-#   #78929/#78944 merge upstream.
-# 016 = fix(checkpoints): bare-repo self-heal for `fatal: not a git repository:
-#   '/.../checkpoints/store'` after `git gc --prune=now` deletes empty
-#   refs/heads/ & branches/ (bare repo with only packed-refs, Git 2.34+).
-#   Observed as `git add -A` spamming ERROR after every auto-prune (24h) —
-#   _repair_bare_repo_dirs() existed but was only called AFTER gc, never
-#   BEFORE the next checkpoint. This patch adds proactive repair before every
-#   git call (_run_git) + retry-on-fatal + early repair in _init_store.
-#   Refs: #65349 (concurrent gc), #79334/#79335 (size-cap loop), #83036
-#   (GC tmp packs/corruption), local 015/#78888. Depends on 015: its hunk #3
-#   calls _ensure_store_excludes(), which 015 defines — add/remove the two
-#   together. Keep until upstream merges the bare-repo-dir fix.
+#   #78929/#78944 merge upstream. RE-ANCHORED on the v0.21.6 bump: upstream
+#   reformatted DEFAULT_EXCLUDES to one pattern per line with a comment per
+#   group and reshaped _init_store, so both the list hunk and the init hunk were
+#   rewritten. _ensure_store_excludes() is now append-only (an operator's own
+#   lines in info/exclude are preserved) and is also called on the
+#   existing-store path, which upstream never refreshes.
+# 016 = fix(checkpoints): bare-store self-heal for `fatal: not a git repository:
+#   '/.../checkpoints/store'`. git's is_git_directory() requires HEAD plus an
+#   objects/ and a refs/ directory; when the store loses one of them every command
+#   fails — including the `git gc` of the next prune, so the store can never repair
+#   itself and every checkpoint silently fails. This deployment logged exactly that
+#   on 2026-08-21 (errors.log.2: `git add -A` rc=128, spamming for over an hour).
+#   The patch adds a proactive mkdir-if-missing before every git call in _run_git, a
+#   retry-on-fatal that self-heals once and re-runs, and an early repair when
+#   _init_store opens an existing store.
+#   v0.21.6 owns the same repair but reaches it from a worse place: gc moved into
+#   checkpoint_pruning.Pruner.reclaim(), after a `_git()` that RAISES on failure, so a
+#   failed or timed-out gc now skips the repair entirely (v2026.9.24's _gc_store()
+#   called it through a _run_git() that never raised). See the sweep paragraph above.
+#   An earlier draft of this comment blamed `git gc` for deleting an empty refs/heads/;
+#   that is NOT reproducible (git 2.47.3 keeps the dir on gc and on pack-refs --prune)
+#   and was dropped rather than shipped. Refs: #65349 (concurrent gc),
+#   #79334/#79335 (size-cap loop), #83036 (GC tmp packs/corruption), local 015/#78888.
+#   Depends on 015: its _init_store hunk calls _ensure_store_excludes(), which 015
+#   defines — add and remove the two together. Keep until upstream merges the
+#   bare-repo-dir fix.
 # 018 = hermes-office specific (NOT upstream): named custom providers fronting
 #   the relay (custom:opencode -> proxy IP) flatten to provider "custom" at
 #   runtime, so is_opencode_target misses on BOTH signals; thread
@@ -288,12 +355,28 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   The knob is also matched by base_url route, so it covers only entries the
 #   operator explicitly annotates. 018 matches by NAME, so it stays effective
 #   for any base_url. Revisit if upstream gives the knob the same fallback.
+# 032 = hermes-office specific (NOT upstream, and no upstream issue either):
+#   gateway/slash_commands.py caps `/skills diff` at a flat 3000 chars for every
+#   platform, while the delivery adapters declare far larger single-message limits
+#   (Matrix _SPLIT_THRESHOLD = max_message_length - 100 = 15900, Feishu 4000,
+#   Discord 1900). A staged batch that renders completely (~6.6 KB for 2 ops)
+#   therefore arrives truncated on the one platform that could carry it in a single
+#   message. The same block also points users at ~/.hermes/pending/skills/<id>.json,
+#   which does not exist when HERMES_HOME is not ~/.hermes (this deployment:
+#   /opt/data); v0.21.6 moved that sentence into locales/*.yaml while keeping the
+#   wrong path, so 032 post-processes the rendered note and re-points it.
+#   _skill_diff_char_budget() reads the adapter's own _SPLIT_THRESHOLD, falls back to
+#   max_message_length - 100, then to 3000, and returns max(3000, limit) — widening
+#   only, so no platform is ever handed a smaller diff than it got before.
+# NOTE: --no-backup-if-mismatch is required, not cosmetic. GNU patch's default is
+# --backup-if-mismatch, so every patch that applies with an offset (007/008/014/018
+# do) leaves a <file>.orig copy next to the patched file in /opt/hermes.
 COPY patches/ /tmp/hermes-patches/
 RUN set -eux; \
     if ls /tmp/hermes-patches/*.patch >/dev/null 2>&1; then \
         for p in /tmp/hermes-patches/*.patch; do \
             echo "==> Applying $(basename "$p")"; \
-            (cd /opt/hermes && patch -p1 < "$p"); \
+            (cd /opt/hermes && patch -p1 --no-backup-if-mismatch < "$p"); \
         done; \
     fi; \
     rm -rf /tmp/hermes-patches
