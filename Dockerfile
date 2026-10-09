@@ -179,8 +179,9 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
 #
-# As of v0.21.6 the roster is 9 patches: the 8 the sweep left, plus 033, added the
-# same day against the same tag (see its block below -- a bug the sweep did not cover).
+# As of v0.21.6 the roster is 10 patches: the 8 the sweep left, plus 033 (a bug the
+# sweep did not cover) and 034 (a backport of an upstream fix committed after the tag),
+# both added the same day against the same tag -- see their blocks below.
 # (This line said 7 through the v2026.9.24 sweep -- already stale then, because 031/032
 # were added without updating it; the real file count at that tag was 9. The v0.21.6
 # sweep corrected it to 8.)
@@ -305,6 +306,32 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # `hermes plugins enable hermes-lcm` fails with the production error without it and
 # completes (lock + install + enable) with it, generating a member pyproject carrying
 # name + version = "0.0.0".
+#
+# 034 ADDED 2026-10-09, roster 9 -> 10 (a BACKPORT, not a local invention): upstream 51609d82
+# ("fix(solstice): load the transport on first use, not at discovery (#134233)", committed
+# 2026-10-08T22:06Z) is newer than our base, so the image ships the noise it fixed. The bundled
+# solstice provider imported `.transport` at module level, and that transport imports
+# agent.gemini_native_adapter, which does a module-level `import httpx`. The PM worker runtime
+# (/opt/hermes/pm-runtime, include-system-site-packages=false, deliberately carrying no
+# application dependencies) has no httpx, and the left-core migration / dependency sync imports
+# hermes_cli.config, which discovers model-provider plugins on import -- so every boot logged
+# "Failed to load bundled provider plugin solstice: No module named 'httpx'" on an otherwise
+# clean start. That was worse than cosmetic: the lean runtime registered 49 providers instead of
+# 50, i.e. the whole solstice profile was dropped, not just its HTTP client. (The gateway venv
+# has httpx 0.28.1 and always loaded it fine -- nothing was broken in the real runtime.) 034
+# moves INFERENCE_BASE_URL into the package __init__ -- the only thing discovery needs from the
+# transport module -- and imports SolsticeClient inside SolsticeProfile.create_client(), so the
+# plugin imports wherever profiles are discovered and the transport loads on first use, in a
+# process that has the app's HTTP stack. RETIRE on the next base bump: upstream main carries it.
+# NOT carried from the same commit: transport.py's `Dict[str, str]` -> `dict[str, str]`
+# annotation normalization (unrelated and cosmetic).
+# Verified: `patch -p1` rc=0 on a pristine 818c13be tree (no fuzz, no .rej/.orig, py_compile +
+# ruff clean, AST assertions on INFERENCE_BASE_URL's single home and the lazy import), and
+# end-to-end in ghcr.io/keivry/hermes-office:v0.21.6 with the pair bind-mounted over the
+# installed copies: pm-runtime `import hermes_cli.config` prints the warning and reports 49
+# providers / solstice absent before, and prints nothing with 50 providers / solstice registered
+# after; the gateway venv still reports 50 providers and create_client(api_key=...) returns a
+# SolsticeClient on https://generativelanguage.googleapis.com/v1alpha.
 # Previous sweeps:
 # v2026.9.14 / v0.21.3: roster stayed at 8; 7 of 8 re-applied offset-only and
 #   014 was re-anchored (upstream inserted reasoning_config={"enabled": False}

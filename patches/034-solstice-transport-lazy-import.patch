@@ -1,0 +1,90 @@
+# 034-solstice-transport-lazy-import.patch
+#
+# Local patch — a BACKPORT of upstream 51609d82 ("fix(solstice): load the transport on first use,
+# not at discovery (#134233)", committed 2026-10-08T22:06Z), which post-dates our base v0.21.6
+# (818c13be). Upstream main carries it (newest commit touching that path as of 2026-10-09), so
+# RETIRE this patch on the next base bump, the way 031 was retired in the v0.21.6 sweep.
+#
+# Why: plugins/model-providers/solstice/__init__.py imported `.transport` at module level, and that
+# transport imports agent.gemini_native_adapter, which does a module-level `import httpx`. The PM
+# worker runtime (/opt/hermes/pm-runtime, built with include-system-site-packages=false and
+# deliberately carrying no application dependencies) has no httpx, and the left-core migration /
+# dependency sync imports hermes_cli.config, which discovers model-provider plugins on import. So
+# every boot logged, on an otherwise clean start:
+#
+#   Failed to load bundled provider plugin solstice: No module named 'httpx'
+#
+# The cost was not only a scary line in the boot log: that lean runtime registered 49 providers
+# instead of 50 — the whole solstice profile was dropped, not just its HTTP client. (The gateway
+# venv has httpx 0.28.1 and always loaded it fine, so nothing was broken in the real runtime and
+# the line itself was pure noise.)
+#
+# After: INFERENCE_BASE_URL moves into the package __init__ — the only thing discovery needs from
+# the transport module — and SolsticeClient is imported inside SolsticeProfile.create_client(), so
+# the plugin imports cleanly wherever profiles are discovered and the transport loads on first use,
+# in a process that actually has the app's HTTP stack.
+#
+# Runtime files only: plugins/model-providers/solstice/{__init__.py,transport.py}
+#
+# NOT carried from the same commit: transport.py's `Dict[str, str]` -> `dict[str, str]` annotation
+# normalization. Our base predates that unrelated change and it has nothing to do with the import
+# fix, so carrying it would widen the blast radius for nothing.
+#
+# Considered and rejected: downgrading the loader warning itself in providers/__init__.py
+# (_import_plugin_dir) for bundled plugins whose import raises ModuleNotFoundError. It hides the
+# line without fixing the import, diverges from the fix upstream chose for this exact report, and
+# would also swallow future bundled-plugin import failures.
+#
+# Verified against a pristine v0.21.6 (818c13be) checkout: `patch -p1 --dry-run` and the real
+# `patch -p1` both rc=0 on both files (no fuzz, no .rej/.orig), reverse dry-run rc=0, py_compile
+# clean, `ruff check` clean under the repo's own pyproject.toml (the three files in that directory
+# already fail `ruff format --check` on the pristine tree too, so this patch adds no formatting
+# debt), plus AST assertions that INFERENCE_BASE_URL is defined exactly once (in __init__), that
+# transport no longer defines it and imports it from the package, that __init__ no longer imports
+# .transport at module level, and that create_client carries the lazy import.
+#
+# End-to-end in the published v0.21.6 image with the pair bind-mounted over the installed copies:
+#   * pm-runtime `import hermes_cli.config` + list_providers(): before -> the warning printed,
+#     49 providers, solstice absent; after -> no output, 50 providers, solstice registered.
+#   * gateway venv: still 50 providers with solstice present, and create_client(api_key=...) returns
+#     a SolsticeClient on https://generativelanguage.googleapis.com/v1alpha — the lazy import
+#     resolves at the real use site, not merely at discovery.
+#
+diff --git a/plugins/model-providers/solstice/__init__.py b/plugins/model-providers/solstice/__init__.py
+index f603c21f..5ea1e954 100644
+--- a/plugins/model-providers/solstice/__init__.py
++++ b/plugins/model-providers/solstice/__init__.py
+@@ -16,7 +16,10 @@ from providers import register_provider
+ from providers.base import ProviderProfile
+ 
+ from .auth import broker_token_request, discover_client
+-from .transport import INFERENCE_BASE_URL, SolsticeClient
++
++# Lives here, not in transport.py: discovery imports this module from interpreters without the app's
++# HTTP stack (PM's runtime reads config, which lists providers), so the transport loads on first use.
++INFERENCE_BASE_URL = "https://generativelanguage.googleapis.com/v1alpha"
+ 
+ # Verified on the per-user-quota endpoint, which has no model listing a user token may read (its
+ # /models answers 403 ACCESS_TOKEN_SCOPE_INSUFFICIENT). Quota is per model, so lite stays last as the
+@@ -43,6 +46,8 @@ def _auth_handler(action: str, args: Any) -> bool:
+ 
+ class SolsticeProfile(ProviderProfile):
+     def create_client(self, **client_kwargs: Any) -> Any:
++        from .transport import SolsticeClient
++
+         allowed = {"api_key", "base_url", "default_headers", "timeout", "http_client"}
+         return SolsticeClient(**{k: v for k, v in client_kwargs.items() if k in allowed})
+ 
+diff --git a/plugins/model-providers/solstice/transport.py b/plugins/model-providers/solstice/transport.py
+index d566b74a..605fc5ca 100644
+--- a/plugins/model-providers/solstice/transport.py
++++ b/plugins/model-providers/solstice/transport.py
+@@ -11,7 +11,7 @@ from typing import Any, Dict
+ 
+ from agent.gemini_native_adapter import GeminiAPIError, GeminiNativeClient, gemini_http_error
+ 
+-INFERENCE_BASE_URL = "https://generativelanguage.googleapis.com/v1alpha"
++from . import INFERENCE_BASE_URL
+ 
+ 
+ class SolsticeClient(GeminiNativeClient):
