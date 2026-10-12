@@ -179,9 +179,10 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
 #
-# As of v0.21.6 the roster is 10 patches: the 8 the sweep left, plus 033 (a bug the
-# sweep did not cover) and 034 (a backport of an upstream fix committed after the tag),
-# both added the same day against the same tag -- see their blocks below.
+# As of v0.21.6 the roster is 11 patches: the 8 the sweep left, plus 033 (a bug the
+# sweep did not cover), 034 (a backport of an upstream fix committed after the tag) and
+# 035 (reaction-hook forwarding, a local feature gap), all added against the same tag --
+# see their blocks below.
 # (This line said 7 through the v2026.9.24 sweep -- already stale then, because 031/032
 # were added without updating it; the real file count at that tag was 9. The v0.21.6
 # sweep corrected it to 8.)
@@ -332,6 +333,25 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # providers / solstice absent before, and prints nothing with 50 providers / solstice registered
 # after; the gateway venv still reports 50 providers and create_client(api_key=...) returns a
 # SolsticeClient on https://generativelanguage.googleapis.com/v1alpha.
+#
+# 035 ADDED 2026-10-12, roster 10 -> 11 (a LOCAL feature gap, nothing upstream to cite): the
+# Matrix adapter only routes a human reaction to the built-in reaction PROMPTS it is currently
+# waiting on (in-memory registry, default expires_at 300s), and it silently drops everything
+# else; there is no way for an out-of-tree consumer to be told about a click, and no signal at
+# all for "un-reacted". The todo/reminder system needs exactly that: a reminder message sent at
+# 09:00 must still complete the item when the capsule is clicked hours later, and un-clicking it
+# (a removed reaction) must undo the completion. 035 forwards human reactions that no built-in
+# prompt claims to the official `set_reaction_handler` hook as `reaction:added`, and handles
+# `m.room.redaction` as `reaction:removed` -- Matrix has no "un-react" event, so removing a
+# reaction IS a redaction of the reaction event and the payload carries the redacted event id
+# (`redacts`). Out-of-tree consumers therefore get a stable contract: reaction payload fields
+# `reaction` / `message_ts` / `event_ts` / `redacts`. The built-in prompt path is untouched
+# (claimed reactions never reach the hook), so approvals and other prompts behave as before.
+# RETIRE if upstream ever routes unclaimed reactions to a public hook.
+# Verified on a pristine 818c13be tree: `patch -p1` rc=0 (no fuzz, no .rej/.orig), reverse
+# `--dry-run` rc=0, py_compile clean, ruff check + ruff format clean on the added lines, and
+# check_structure.py asserts the structural delta exactly -- MatrixAdapter 125 -> 127 methods,
+# 1 new top-level function, no class-body indentation drift.
 # Previous sweeps:
 # v2026.9.14 / v0.21.3: roster stayed at 8; 7 of 8 re-applied offset-only and
 #   014 was re-anchored (upstream inserted reasoning_config={"enabled": False}
