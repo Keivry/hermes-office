@@ -487,21 +487,64 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 
 | 项目 | 证据 |
 | --- | --- |
-| 单测 | `python -m unittest discover -s tests` → `Ran 51 tests ... OK`（含 6 条点击语义离线端到端） |
+| 单测 | `python -m unittest discover -s tests` → `Ran 59 tests ... OK`（含 6 条点击语义、7 条时段/迁移端到端） |
 | 代码风格 | `ruff check .` + `ruff format --check .` 全过 |
 | 跨库原子（rollback journal） | 实证 0/50 漂移；WAL 33/50 漂移 → 铁律写进 `open_db()` + 单测 + `doctor` |
 | 历史不可篡改 | `sqlite3.set_authorizer` 按 `db_name=="hist"` 拒绝 UPDATE/DELETE，`main` 照常 |
 | 同事务回滚 | `test_event_and_data_are_one_transaction`：写完事件后抛错 → 数据与历史一起回滚 |
 | 拆分 | `test_tables_live_in_the_right_file`：热库无 `item_event`，历史库只有 `item_event`+`meta` |
-| 幂等发送 | `reminder(occurrence_id, notify_date)` 唯一 + `INSERT OR IGNORE`；同日重跑不发第二条 |
+| 幂等发送 | `reminder(occurrence_id, notify_date, slot)` 唯一 + `INSERT OR IGNORE`；同**时段**重跑不发第二条 |
 | dry-run 可复现 | 两次 `tick --dry-run --date D` 输出 md5 相同（预览固定 09:00） |
-| 备份 | 白名单含两库；`VACUUM INTO` 快照；恢复演练 `integrity_check=ok` + 表齐 + `schema_version=1` |
+| 备份 | 白名单含两库；`VACUUM INTO` 快照；恢复演练 `integrity_check=ok` + 表齐 + `schema_version` |
 | 插件 | `hermes plugins doctor` rc=0、`validate` 「Validation passed.」、无内置命令冲突、已 enable |
 | hook | AST OK + `HOOK.yaml` events 解析为 `['reaction:added','reaction:removed']` |
 
-### 还没做／等用户拍板
+---
 
-- **两个房间 ID**（`TODO_ROOM_WORK` / `TODO_ROOM_PERSONAL`，**建房间不要开加密**）→ 填好后 resume cron job。
-- **补丁 035 部署**：打进运行中的 `/opt/hermes` 需重启 gateway（本对话掉线几秒）；等镜像重建也可以。
-  `Dockerfile` 的 roster 注释尚未加 035（计数已是 11，改它会触发 CI）。
-- 可选：每年 `export-history` 离线归档（默认不做，每日备份已覆盖）。
+## 上线配置（2026-10-12，已生效）
+
+### 房间
+
+| 分类 | 房间 ID | 加密 |
+| --- | --- | --- |
+| 工作 | `!rrQWcHbW2f3uIhCrXH:mt.keivry.ren` | 无（明文发送才可用；实测 `m.room.encryption` 事件不存在） |
+| 个人 | `!WZzY1q7LYt2Jsp3Vzv:mt.keivry.ren` | 无 |
+
+两房间成员：`@keivry` + `@paimon`。真实投递验证：走 `notify.send`（与 tick 同一条路径）
+各发一条连通测试消息，均返回 `event_id`（投递链路端到端可用）。
+
+### 一天三次：`0 9,12,20 * * *`
+
+原来按「天」去重（`UNIQUE(occurrence_id, notify_date)`），一天跑三次只有第一次发得出去 ——
+所以提醒的幂等粒度升级为「天 + 时段」（`schema_version` 1 → 2）：
+
+- **时段归属**：取 `TODO_TICK_SLOTS`（默认 `09,12,20`）里**不晚于当前时刻的最后一个时段**。
+  手动跑、网关晚点补跑都落在确定时段上 → 天然幂等；网关停机错过某时段不会事后补发（内容本来就一样）。
+- **待办 / 重复任务**：每个时段各发一次（没完成就早中晚都提醒）。
+- **纪念日（`kind=date`）**：固定写 `slot='day'` → **一天最多一行**（沿用用户确认的规则）；
+  `TODO_SLOT_MODE_ANNIVERSARY=all` 可改成按时段各提醒一次。
+- **「未来 7 天」预览行**：只在当天第一个时段出现，免得一天刷三遍。
+- **老库自动迁移**：`_migrate()` 检测 `reminder` 缺 `slot` 列 → 重建表并把老行补 `slot='day'`
+  （迁移在写 `schema_version` 之前，失败就不会被标成新版本）。真实两库已升到 v2。
+
+### cron
+
+`脚本 job`：`script=todo/tick.py`，`schedule=0 9,12,20 * * *`，`deliver=origin`。
+成功 → 最后一行 `{"wakeAgent": false}`（0 LLM、0 token）；只有失败才唤醒 agent 报告。
+
+### 补丁 035
+
+`Dockerfile` roster 注释 10 → 11 并加了 035 说明块；推送后 CI（run `38229901049`，`432a194`）
+**构建成功**，构建日志可见 `==> Applying 035-matrix-reaction-hook-forwarding.patch` /
+`patching file plugins/platforms/matrix/adapter.py` → 035 已在镜像
+`ghcr.io/keivry/hermes-office` 里。推送前的独立复验：把 035 打在**已含 007–034 的树**上
+（正是 CI 的落地顺序）`patch -p1` rc=0、无 fuzz、无 `.rej/.orig`，`py_compile` 干净，
+`ruff` 与基线**完全一致**（前后同为 3 条既存告警，补丁零新增）；且 035 是唯一碰
+`plugins/platforms/matrix/adapter.py` 的补丁 → 不存在补丁间交叉干扰。
+
+⚠️ **点击胶囊（完成/撤销）要等运行中的环境换上这个新镜像才生效** —— 现在运行中的 `/opt/hermes`
+还是旧镜像层（玩具路径已就绪，但 `reaction:added` / `reaction:removed` 还没被转发到 hook）。
+
+### 已确认不做
+
+- 每年 `export-history` 离线归档：不做（每日备份已覆盖）。
