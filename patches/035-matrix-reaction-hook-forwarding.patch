@@ -1,0 +1,188 @@
+# 035-matrix-reaction-hook-forwarding.patch
+#
+# Local patch — NOT an upstream PR. Checked 2026-10-12 against upstream main
+# (raw.githubusercontent.com/NousResearch/hermes-agent/main/plugins/platforms/matrix/adapter.py):
+# the file is still 3267 lines, contains no `set_reaction_handler` call, no ROOM_REDACTION event
+# handler, and ends `_on_reaction` on the same three built-in prompt handlers as our v0.21.6 copy,
+# so the gap is still open upstream and there is no issue or PR to cite. (main's copy differs from
+# ours in 34 unrelated hunks — `Dict[...]` -> `dict[...]`, `subprocess.run(..., check=False)`,
+# dropped `# noqa` — none of them near these anchors.)
+#
+# Why: base.py documents a platform-neutral reaction contract — `set_reaction_handler` takes a
+# normalised dict (platform, event_name "reaction:added"/"reaction:removed", reaction, user_id,
+# item_user_id, channel_id, message_ts, event_ts, raw_event) and fans it out through
+# `HookRegistry.emit`; run_adapters.py wires that setter on every adapter; Slack implements it in
+# `_handle_slack_reaction`. The Matrix adapter only inherits the setter: a human reaction reaches
+# `_on_reaction`, matches none of the three in-memory prompt registries (exec approval, model
+# picker, choice picker) and is silently dropped — no hooks/ handler and no plugin can observe a
+# Matrix reaction at all.
+#
+# After: an unclaimed reaction is forwarded as "reaction:added" (message_ts = the reacted-to message
+# event id, event_ts = the m.reaction event id), and a new ROOM_REDACTION handler forwards
+# `m.room.redaction` as "reaction:removed".
+#
+# Why redactions are in scope: the client-server API has no "reaction removed" event. Tapping an
+# already-set reaction off is a redaction of the user's own m.reaction event and carries only that
+# event's id, so a consumer that must undo on the second tap has no other signal. The removed
+# reaction's id therefore travels in an extra `redacts` key, while `message_ts`/`reaction` stay
+# empty (a redaction does not name the target message or the emoji; resolving them would cost an
+# extra room-event fetch per redaction). `item_user_id` is left empty for the same reason — the
+# reacted-to message's author is not known synchronously, and no in-tree consumer reads the field
+# (`grep -rn item_user_id` -> base.py's contract docstring and Slack's producer only). Redactions
+# of ordinary message events are forwarded too; telling them apart is the consumer's job.
+#
+# Considered and rejected:
+#   (1) Driving reminders through the built-in picker prompt machinery (_MatrixPickerPrompt /
+#       send_choice_picker): its registry is in-memory and expires at MATRIX_APPROVAL_TIMEOUT_SECONDS
+#       (default 300s) — _claim_reaction_prompt -> _matrix_prompt_expired -> on_expired consumes the
+#       reaction and runs nothing, so a tap even ten minutes after the reminder would be answered
+#       "expired". Widening that timeout is the wrong fix: it also governs exec-approval prompts,
+#       where a day-long window is a security regression.
+#   (2) Polling /sync from a side process to collect reactions: a second sync loop plus a
+#       token/cursor store for no benefit over the push path.
+#   (3) Relying on the prompt registry with only a longer expires_at: the registry lives in memory
+#       (MemoryStateStore/MemorySyncStore), so a gateway restart drops every pending prompt.
+#
+# Runtime files only: plugins/platforms/matrix/adapter.py
+#
+# Verified 2026-10-12 against a pristine v0.21.6 checkout (818c13be): a real `patch -p1` on a fresh
+# copy of the file rc=0, no fuzz, no .rej/.orig; `patch -p1 -R --dry-run` rc=0; and every check
+# below was run on that applied result — `py_compile` clean; `ruff check` clean under the repo's
+# own pyproject.toml; the added lines are `ruff format`-clean (they do not appear in
+# `ruff format --diff` on the patched file — the pristine file already fails `ruff format --check`
+# wholesale on its own pre-existing style, so that check carries no signal here); AST shape via the
+# image repo's scripts/check_structure.py: MatrixAdapter 125 -> 127 methods (_forward_reaction_event,
+# _on_redaction), one new top-level function (_matrix_raw_event), no class-body indent drift.
+#
+# Re-anchor on a base bump: the patch is two insertions (the add_event_handler block in _connect,
+# the tail of _on_reaction) plus one new method pair anchored on `_claim_reaction_prompt`. If those
+# anchors move, re-anchor; drop it only if upstream starts forwarding reactions itself.
+diff --git a/plugins/platforms/matrix/adapter.py b/plugins/platforms/matrix/adapter.py
+index 69d1b09e..ba689fbe 100644
+--- a/plugins/platforms/matrix/adapter.py
++++ b/plugins/platforms/matrix/adapter.py
+@@ -426,6 +426,19 @@ _MATRIX_MEDIA_FILENAME_EXTS = frozenset({
+ _MATRIX_MODEL_PICKER_REACTIONS = tuple(f"{d}\ufe0f\u20e3" for d in "123456789") + ("\U0001f51f",)
+ _MATRIX_CHOICE_PICKER_REACTIONS = _MATRIX_MODEL_PICKER_REACTIONS + ("\U0001f170\ufe0f", "\U0001f171\ufe0f")
+ 
++
++def _matrix_raw_event(event: Any) -> Any:
++    """Best-effort plain form of a mautrix event for hook consumers.
++
++    Mautrix hands handlers attribute objects whose nested content is not JSON-serializable,
++    while ``raw_event`` in the reaction-hook contract is consumed by arbitrary third-party
++    code (hooks/, plugins). Hand over ``serialize()`` when it works, the object when it does not.
++    """
++    try:
++        return event.serialize()
++    except Exception:  # pragma: no cover - serialization is best-effort
++        return event
++
+ def _looks_like_matrix_image_filename(text: str) -> bool:
+     """True when an m.image body is just the uploaded filename (no caption) — not user text."""
+     return _looks_like_transport_filename(text, "image/", _MATRIX_IMAGE_FILENAME_EXTS)
+@@ -1337,6 +1350,9 @@ class MatrixAdapter(BasePlatformAdapter):
+         client.add_dispatcher(MembershipEventDispatcher)  # without this INVITE never fires
+         client.add_event_handler(EventType.ROOM_MESSAGE, self._on_room_message, wait_sync=True)
+         client.add_event_handler(EventType.REACTION, self._on_reaction, wait_sync=True)
++        client.add_event_handler(
++            EventType.ROOM_REDACTION, self._on_redaction, wait_sync=True
++        )
+         client.add_event_handler(IntEvt.INVITE, self._on_invite, wait_sync=True)
+         self._startup_ts = time.time()
+         self._reset_clock_skew_detector()  # a reconnect after an NTP fix starts clean
+@@ -2509,6 +2525,94 @@ class MatrixAdapter(BasePlatformAdapter):
+                         self._handle_choice_picker_reaction):
+             if await handler(room_id, reacts_to, key, sender):
+                 return
++        # Not one of our prompts: hand the human reaction to the platform reaction hook
++        # (base.py ``set_reaction_handler``), which hooks/ and plugins consume.
++        await self._forward_reaction_event(
++            "reaction:added",
++            room_id=room_id,
++            user_id=sender,
++            event_id=event_id,
++            target_event_id=reacts_to,
++            reaction=key,
++            raw_event=_matrix_raw_event(event),
++        )
++
++    async def _forward_reaction_event(
++        self,
++        event_name: str,
++        *,
++        room_id: str,
++        user_id: str,
++        event_id: str,
++        target_event_id: str = "",
++        reaction: str = "",
++        removed_reaction_id: str = "",
++        raw_event: Any = None,
++    ) -> None:
++        """Fan one native reaction event out to ``set_reaction_handler`` (HookRegistry.emit).
++
++        Payload keys follow the contract documented on ``set_reaction_handler``
++        (gateway/platforms/base.py): ``platform``, ``event_name`` ("reaction:added" /
++        "reaction:removed"), ``reaction``, ``user_id``, ``item_user_id``, ``channel_id``,
++        ``message_ts``, ``event_ts``, ``raw_event``.
++
++        Matrix specifics: ``message_ts`` is the reacted-to message event id and ``event_ts``
++        this event's own id. Removing a reaction is a redaction of the m.reaction event,
++        which carries only that event's id, so ``reaction:removed`` reports it in the extra
++        ``redacts`` key while ``message_ts`` and ``reaction`` stay empty; a consumer matches
++        it against the m.reaction event it saw earlier. ``item_user_id`` is empty: resolving
++        the reacted-to message's author costs one extra room-event fetch per reaction and no
++        in-tree consumer reads the field.
++        """
++        handler = getattr(self, "_reaction_handler", None)
++        if handler is None:
++            return
++        try:
++            await handler({
++                "platform": "matrix",
++                "event_name": event_name,
++                "reaction": reaction,
++                "user_id": user_id,
++                "item_user_id": "",
++                "channel_id": room_id,
++                "message_ts": target_event_id,
++                "event_ts": event_id,
++                "redacts": removed_reaction_id,
++                "raw_event": raw_event,
++            })
++        except Exception:  # pragma: no cover - hook contract is non-blocking
++            logger.debug("Matrix: reaction hook forwarding failed", exc_info=True)
++
++    async def _on_redaction(self, event: Any) -> None:
++        """Forward a room redaction as ``reaction:removed``.
++
++        Tapping an already-set reaction off is a redaction of the user's own m.reaction event
++        and there is no other "reaction removed" event in the client-server API, so this is the
++        only signal an undo-by-tapping-again consumer ever gets. Redactions of ordinary message
++        events arrive here too (telling them apart would cost a room-event fetch) and deciding
++        what they mean is the consumer's job.
++        """
++        sender = str(getattr(event, "sender", ""))
++        if self._is_self_sender(sender):
++            return
++        event_id = str(getattr(event, "event_id", ""))
++        if self._is_duplicate_event(event_id):
++            return
++        redacted_event_id = str(getattr(event, "redacts", "") or "")
++        if not redacted_event_id:
++            return
++        room_id = str(getattr(event, "room_id", ""))
++        logger.info(
++            "Matrix: redaction from %s of %s in %s", sender, redacted_event_id, room_id
++        )
++        await self._forward_reaction_event(
++            "reaction:removed",
++            room_id=room_id,
++            user_id=sender,
++            event_id=event_id,
++            removed_reaction_id=redacted_event_id,
++            raw_event=_matrix_raw_event(event),
++        )
+ 
+     async def _claim_reaction_prompt(
+         self, registry: dict, room_id: str, reacts_to: str, key: str, sender: str, label: str, invalid_text: str,
