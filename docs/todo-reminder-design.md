@@ -438,3 +438,64 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 `/opt/data/config.yaml`（仅启用插件后由 `hermes plugins enable` 写入）。
 
 ---
+
+---
+
+## 实现记录（2026-10-12）
+
+状态：**核心已实现并验证**（T0–T13b 完成；T14 端到端 PoC 与 T15 补丁部署等用户输入）。
+
+代码位置 `/opt/data/scripts/todo/`：`todo.py`（CLI 全量子命令）、`store.py`（两库/审计/对账）、
+`sched.py`（农历/重复规则/选取）、`render.py`（渲染与胶囊）、`matrix_edit.py`（`m.replace`）、
+`notify.py`（发送/编辑）、`tick.py`（cron 入口）；测试 `tests/`（46 条）。
+
+### 与本文档的偏差（都是有原因的选择，不是遗漏）
+
+1. **条目房间覆盖用 `--item-room`，不是 `--room`**：`--room` 被审计参数（谁在哪个房间操作）占用了，
+   同一条命令里一个旗标两个含义会互相吃掉。审计参数 `--source/--actor/--actor-name/--room` 由顶层与
+   各子命令统一接受。
+2. **`hist.item_event` 保留 `AUTOINCREMENT`**：审计行号永不复用（将来有人手删也不会错位），代价是
+   历史库里多一张 SQLite 内部表 `sqlite_sequence` —— 所以「历史库只有 item_event + meta」的断言写成
+   `hist - {"sqlite_sequence"} == {"item_event", "meta"}`。
+3. **原子性靠显式 `transaction()`，不靠 `with con:`**：`sqlite3` 默认 `isolation_level=""` 会在 DML 前
+   隐式 BEGIN，裸 `INSERT` 不 commit 就在 `close()` 时被**静默回滚**（实现时真的把 `schema_version`
+   弄丢过一次）。`open_db()` 现在用 `autocommit=True`，所有写路径走 `store.transaction(con)`。
+4. **`purge` 同时清掉该条目的 `reminder_key`**：否则历史消息里的胶囊还会指向已删条目（点了没反应）。
+   `item_event` 依旧全留、且写明 `action='purge'`。
+5. **`tick` 有错误时非 0 退出**：否则 `wakeAgent:false` 会把「发送全失败」也静默掉，wake-gate 形同虚设。
+   现在：无活可干 → 静默；房间没配/发送失败 → rc=1 → 唤醒 agent 报告。
+6. **cron job 建为 paused**：两个房间 ID 还是占位符，启用会每天 09:00 报一次「没配房间」。房间配好即 resume。
+7. **`store.history()` 返回新→旧**（照测试约定），CLI 展示时翻成时间正序。
+
+### 实现中发现并修掉的 5 个坑（已写进技能 `todo-reminder`）
+
+1. `isolation_level` 默认值静默回滚裸 INSERT（见偏差 3）。
+2. `store` 的 mutator 签名是 `(db, item_id, ...)` —— `store.get_item(item_id)` 会把 id 当 db、静默去开
+   一个叫 `3` 的库。已加护栏：`resolve_paths` 对非路径参数立刻 `TypeError`。
+3. 全新库上必须先 `ensure()` 建表，否则 `add` 直接 `no such table: item`。
+4. 规则生成的期次不得早于条目创建日，否则今天新建的「每周一」任务当天就显示「逾期 7 天」。
+5. 农历三边界：腊月三十常不存在（退到该月最后一天）、无闰月时优先闰月会抛错（回落普通月）、
+   农历十二月落在下一年公历 1–2 月（算「今年生日」要同时看 `year-1` 与 `year`）。
+
+### 关键验证证据（都是实跑）
+
+| 项目 | 证据 |
+| --- | --- |
+| 单测 | `python -m unittest discover -s tests` → `Ran 46 tests ... OK` |
+| 代码风格 | `ruff check .` + `ruff format --check .` 全过 |
+| 跨库原子（rollback journal） | 实证 0/50 漂移；WAL 33/50 漂移 → 铁律写进 `open_db()` + 单测 + `doctor` |
+| 历史不可篡改 | `sqlite3.set_authorizer` 按 `db_name=="hist"` 拒绝 UPDATE/DELETE，`main` 照常 |
+| 同事务回滚 | `test_event_and_data_are_one_transaction`：写完事件后抛错 → 数据与历史一起回滚 |
+| 拆分 | `test_tables_live_in_the_right_file`：热库无 `item_event`，历史库只有 `item_event`+`meta` |
+| 幂等发送 | `reminder(occurrence_id, notify_date)` 唯一 + `INSERT OR IGNORE`；同日重跑不发第二条 |
+| dry-run 可复现 | 两次 `tick --dry-run --date D` 输出 md5 相同（预览固定 09:00） |
+| 备份 | 白名单含两库；`VACUUM INTO` 快照；恢复演练 `integrity_check=ok` + 表齐 + `schema_version=1` |
+| 插件 | `hermes plugins doctor` rc=0、`validate` 「Validation passed.」、无内置命令冲突、已 enable |
+| hook | AST OK + `HOOK.yaml` events 解析为 `['reaction:added','reaction:removed']` |
+
+### 还没做／等用户拍板
+
+- **两个房间 ID**（`TODO_ROOM_WORK` / `TODO_ROOM_PERSONAL`，**建房间不要开加密**）→ 填好后 resume cron job。
+- **补丁 035 部署**：打进运行中的 `/opt/hermes` 需重启 gateway（本对话掉线几秒）；等镜像重建也可以。
+  `Dockerfile` 的 roster 注释尚未加 035（计数已是 11，改它会触发 CI）。
+- 可选：每年 `export-history` 离线归档（默认不做，每日备份已覆盖）。
