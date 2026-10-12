@@ -467,7 +467,7 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 6. **cron job 建为 paused**：两个房间 ID 还是占位符，启用会每天 09:00 报一次「没配房间」。房间配好即 resume。
 7. **`store.history()` 返回新→旧**（照测试约定），CLI 展示时翻成时间正序。
 
-### 实现中发现并修掉的 5 个坑（已写进技能 `todo-reminder`）
+### 实现中发现并修掉的 6 个坑（已写进技能 `todo-reminder`）
 
 1. `isolation_level` 默认值静默回滚裸 INSERT（见偏差 3）。
 2. `store` 的 mutator 签名是 `(db, item_id, ...)` —— `store.get_item(item_id)` 会把 id 当 db、静默去开
@@ -476,12 +476,18 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 4. 规则生成的期次不得早于条目创建日，否则今天新建的「每周一」任务当天就显示「逾期 7 天」。
 5. 农历三边界：腊月三十常不存在（退到该月最后一天）、无闰月时优先闰月会抛错（回落普通月）、
    农历十二月落在下一年公历 1–2 月（算「今年生日」要同时看 `year-1` 与 `year`）。
+6. **撤销路径的幂等键必须用「撤回事件自己」的 id**：`m.room.redaction` 带的 `redacts` 是**被撤回的
+   那个反应**的 id —— 而那个 id 已经被「完成」那次写进 `reaction_seen`（主键）。若拿它再插一次判重，
+   `INSERT OR IGNORE` 会直接判成「已处理过」，**撤销永远不会生效**。所以 hook 额外传 `--redaction-event-id`
+   （本次撤回事件的 id）作幂等键，`--reaction-event-id` 只用于反查原完成记录。
+   这个 bug 是离线端到端测试（`tests/test_react.py`）抓出来的 —— 单元测试只看单点行为不会暴露它。
+   另外：审计里存**客户端原样的** emoji（保留 VS16），只用归一化后的形态做匹配，别把原样形态丢掉。
 
 ### 关键验证证据（都是实跑）
 
 | 项目 | 证据 |
 | --- | --- |
-| 单测 | `python -m unittest discover -s tests` → `Ran 46 tests ... OK` |
+| 单测 | `python -m unittest discover -s tests` → `Ran 51 tests ... OK`（含 6 条点击语义离线端到端） |
 | 代码风格 | `ruff check .` + `ruff format --check .` 全过 |
 | 跨库原子（rollback journal） | 实证 0/50 漂移；WAL 33/50 漂移 → 铁律写进 `open_db()` + 单测 + `doctor` |
 | 历史不可篡改 | `sqlite3.set_authorizer` 按 `db_name=="hist"` 拒绝 UPDATE/DELETE，`main` 照常 |
