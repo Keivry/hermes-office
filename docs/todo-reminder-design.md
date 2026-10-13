@@ -315,7 +315,8 @@ history [ID] [--limit 50] [--all]          # 无 ID = 全库最近 N 条（跨�
 log    [--since D] [--until D] [--action A] [--category C] [--json]
 export-history --out F [--since D] [--until D] [--format jsonl|csv]   # 归档（历史库专用）
 doctor [--reconcile]                       # 两库健康检查 / 对账（见 T9c）
-done   ID | #ID     [--date YYYY-MM-DD]
+done   ID | #ID     [--date YYYY-MM-DD]     # --date = 补记的完成日：先认 ≤ 该日最早的未完成期次，
+                                           #   没有才按期建行（回执写「期次 X · 补记日 D」）
 undo   ID | #ID
 rm     ID                                  # 软删（写 delete 事件）
 purge  ID --yes                            # 物理删（写 purge 事件，历史保留）
@@ -467,7 +468,7 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 代码位置 `/opt/data/scripts/todo/`：`todo.py`（CLI 全量子命令）、`store.py`（两库/审计/对账）、
 `sched.py`（农历/重复规则/选取）、`render.py`（渲染与胶囊）、`matrix_edit.py`（`m.replace`）、
 `notify.py`（发送/编辑）、`tick.py`（cron 入口）；测试 `tests/`（**当日** 2 个文件 / 15 条：
-`react_test.py` + `add_test.py`；现为 3 个文件 / 53 条，见文末更新记录）。
+`react_test.py` + `add_test.py`；现为 3 个文件 / 54 条，见文末更新记录）。
 
 ### 与本文档的偏差（都是有原因的选择，不是遗漏）
 
@@ -507,7 +508,7 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 
 | 项目 | 证据 |
 | --- | --- |
-| 单测 | `python -m unittest discover -s tests -p '*_test.py'` → `Ran 15 tests ... OK`（**2026-10-12 当时**的 6 条点击语义 + 9 条 `--due` 校验；现为 `Ran 53 tests ... OK`，见文末更新记录）。**必须带 `-p '*_test.py'`**：两个文件都按 `*_test.py` 命名（避开 disk-cleanup 对 `test_*` 的跟踪），默认 `test*.py` 模式会跑 0 条（退出码 5，不会静默通过） |
+| 单测 | `python -m unittest discover -s tests -p '*_test.py'` → `Ran 15 tests ... OK`（**2026-10-12 当时**的 6 条点击语义 + 9 条 `--due` 校验；现为 `Ran 54 tests ... OK`，见文末更新记录）。**必须带 `-p '*_test.py'`**：两个文件都按 `*_test.py` 命名（避开 disk-cleanup 对 `test_*` 的跟踪），默认 `test*.py` 模式会跑 0 条（退出码 5，不会静默通过） |
 | 代码风格 | `ruff check .` + `ruff format --check .` 全过 |
 | 跨库原子（rollback journal） | 实证 0/50 漂移；WAL 33/50 漂移 → 铁律写进 `open_db()` + 单测 + `doctor` |
 | 历史不可篡改 | `sqlite3.set_authorizer` 按 `db_name=="hist"` 拒绝 UPDATE/DELETE，`main` 照常 |
@@ -598,6 +599,38 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 **验证（实跑）**：`pytest tests` **53 passed**（49 + 本轮 4 条回归）；`unittest -p '*_test.py'` → 53 OK；
 4 条新用例在改前代码（`4286a70`）上 **4/4 全红**；`ruff check` / `format --check` 通过；真实两库未被本轮触碰
 （mtime 不变）。
+
+---
+
+## 更新记录（2026-10-13 三轮）：补记 `done --date` 认已有的未完成期次
+
+二轮审查末尾记的「已知残留」：`done --date D` 走 `upsert_occurrence(D)`，若已有**逾期未完成的期次**
+（`D' ≠ D`），就为 D 另建一行并完成它 —— 逾期那期永远留在 `pending`（`list` 对不上、之后 `done`
+还会去完成错的那一期），**撤销补记后更是变成两行 `pending`**。
+
+实测（改前，`kind=date` 纪念日 10-20、当天没点、10-21 补记）：
+
+```
+done 1 --date 2026-10-21   →  期次 1/2026-10-20/pending  2/2027-10-20/pending  5/2026-10-21/done
+undo 1                     →  期次 1/2026-10-20/pending  2/2027-10-20/pending  5/2026-10-21/pending
+```
+
+修法（`cmd_done`）：`--date D` 时**先认已有的未完成期次** —— 取「`≤ D` 里最早的 `pending` 期次」
+作为完成对象（没有这样的期次才按 D 新建）；完成日 `ack` 仍是 D（`after:` 锚点照旧按 D 算）。
+回执写成 `完成 #1 标题（期次 2026-10-20 · 补记日 2026-10-21）`，免得被看成改期。改后同一场景：
+
+```
+done 1 --date 2026-10-21   →  期次 1/2026-10-20/done  2/2027-10-20/pending
+undo 1                     →  期次 1/2026-10-20/pending  2/2027-10-20/pending   （回到原状，不多行）
+```
+
+口径与不带 `--date` 的路径一致（那条由 `sched.pick_completion_date` 选期次）——**两条路径都只动
+已有期次，不为未来凭空建行**。
+
+**验证（实跑）**：新增回归 `test_backfill_consumes_existing_overdue_occurrence`（`interval_test.py`）
+在改前代码（`3c9cec2`）上**红在行为断言上**（`'2026-10-21' unexpectedly found in [...]`）；
+`pytest tests` **54 passed**；`unittest -p '*_test.py'` → 54 OK；`ruff check` / `format --check` 通过；
+`selftest` ✓；真实两库 `doctor --reconcile` 全 ✓ 且 mtime 不变。
 
 ---
 
