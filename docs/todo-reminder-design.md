@@ -577,8 +577,15 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 `ruff` 与基线**完全一致**（前后同为 3 条既存告警，补丁零新增）；且 035 是唯一碰
 `plugins/platforms/matrix/adapter.py` 的补丁 → 不存在补丁间交叉干扰。
 
-⚠️ **点击胶囊（完成/撤销）要等运行中的环境换上这个新镜像才生效** —— 现在运行中的 `/opt/hermes`
-还是旧镜像层（玩具路径已就绪，但 `reaction:added` / `reaction:removed` 还没被转发到 hook）。
+✅ **035 已在运行环境生效**（2026-10-13 复核，原「要等新镜像」的等待已解除）：运行树
+`/opt/hermes/plugins/platforms/matrix/adapter.py` 已含 `_forward_reaction_event()` 与
+`reaction:added` 转发分支，该文件 mtime 2026-10-13 10:09；gateway 进程 2026-10-13 10:30:37
+启动（晚于该 mtime → 加载的就是这份代码）；hook 本体 `/opt/data/hooks/todo-reaction/HOOK.yaml`
+的 `events` 已声明 `reaction:added` / `reaction:removed`。
+
+⚠️ **尚缺功能复验**：还没有一次真实的胶囊点击数（历史库最新事件停在 2026-10-12 17:10），
+所以以上是代码级证据而非端到端证据 —— 首次实点（或撤销）后拿 `state/todo/reaction.log` +
+`history.db` 的 `item_event` 补一次确认。
 
 ### 已确认不做
 
