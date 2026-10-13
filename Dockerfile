@@ -1,23 +1,29 @@
-ARG HERMES_AGENT_VERSION=v0.21.6
+# Base tag: upstream publishes NO bare `v0.21.7` Docker tag (Docker Hub 404s; the last
+# bare tag is v0.21.6) and no October date tag either. v0.21.7 exists only as
+# `rc.15-v0.21.7`, whose multi-arch index digest is identical to `stable`/`latest`
+# (sha256:444b42594e7f467425872fc35e077a227d377f0fe0726bc818706d62175fad8b) -- i.e. it
+# IS the promoted v0.21.7 release image. Pin the tag to keep the build reproducible;
+# swapping it for a bare `v0.21.7` later is a rename if the digest still matches.
+ARG HERMES_AGENT_VERSION=rc.15-v0.21.7
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.155
+ARG OFFICECLI_VERSION=v1.0.157
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
 ARG PPT_MASTER_VERSION=v6.7.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.135.0
+ARG DOCLING_VERSION=2.138.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=331fa474e26e428e2e6af1143b2fdab19cee492d7d21897b8899ce1c14755662
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.29.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=7b27accfa545169ad070efb8a6679b25d63acc8513bbc0c05937c3ce94c13ea5
-ARG PDFCPU_VERSION=0.16.1
+ARG PDFCPU_VERSION=0.16.2
 ARG PDFCPU_ASSET_URL=https://github.com/pdfcpu/pdfcpu/releases/download/v${PDFCPU_VERSION}/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64.tar.xz
-ARG BUN_VERSION=1.4.2
+ARG BUN_VERSION=1.4.3
 ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
-ARG CLAWMEM_VERSION=0.43.1
+ARG CLAWMEM_VERSION=0.43.3
 ARG RTK_VERSION=v0.51.0
 ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 ARG GH_VERSION=v2.102.0
@@ -27,6 +33,12 @@ ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH
 # /usr/local/lib. Debian's /usr/bin/sqlite3 (compiled against 3.46.1) resolves
 # /usr/local/lib first via ld.so.conf.d and refuses to run with "header and
 # source version mismatch". Pin the matching tools zip under /usr/local/bin.
+# DO NOT bump this with the base image. The pin is COUPLED to the libsqlite3 the base
+# builds: v0.21.7 still sets `SQLITE_AUTOCONF_VERSION=3530400` upstream and installs
+# libsqlite3.so.3.53.4 into /usr/local/lib. A 3.54 CLI resolves that 3.53.4 runtime
+# library first (ld.so.conf.d) and refuses to start -- the exact failure this pin
+# exists to avoid. Latest-tools-zip (3540000) is deliberately NOT taken. Bump only
+# when the base's SQLITE_AUTOCONF_VERSION moves, and with the new zip's SHA256.
 ARG SQLITE_VERSION=3530400
 ARG SQLITE_ASSET_URL=https://www.sqlite.org/2026/sqlite-tools-linux-x64-${SQLITE_VERSION}.zip
 ARG SQLITE_ASSET_SHA256=7a6f4d1720e4bc13faa3d934bfce37b816a496c0a2480deacd64cfd8be6cf224
@@ -118,13 +130,14 @@ RUN curl -fsSL "${SQLITE_ASSET_URL}" -o /tmp/sqlite-tools.zip \
     && rm -rf /tmp/sqlite-tools.zip /tmp/sqlite-tools \
     && sqlite3 --version
 
-# npm 12 (the v0.21.6 base) removed --unsafe-perm and now hard-errors on
+# npm 12 (the base's pinned npm -- 12.0.2 in v0.21.6 AND v0.21.7, checked in
+# pm/lock.json) removed --unsafe-perm and now hard-errors on
 # unknown CLI flags (EUNKNOWNCONFIG) instead of ignoring them. It was never
 # needed here anyway: npm >= 7 runs lifecycle scripts as root by default, and
 # clawmem ships no install/postinstall script of its own.
 #
 # --prefix /usr/local pins the global tree exactly where this image's ENV and
-# PATH expect it (/usr/local/bin/clawmem). The v0.21.6 base resolves node
+# PATH expect it (/usr/local/bin/clawmem). The base resolves node
 # through a symlink into its PM store (/opt/hermes/tools/node-*/bin/node), so
 # npm's implicit global prefix follows that store -- a directory that is not on
 # the image PATH -- and a bare `-g` install would drop the clawmem CLI where
@@ -153,7 +166,7 @@ RUN mkdir -p /opt/tools /opt/tools/clawmem-plugin \
 # can be added under USER hermes.
 RUN chown -R hermes:hermes /opt/hermes/.venv
 
-# The v0.21.6 base deliberately keeps uv off PATH: PM resolves the pinned uv
+# The base deliberately keeps uv off PATH: PM resolves the pinned uv
 # (0.12.3, in its own store) and hands build consumers Python environments,
 # not installer executables -- /usr/local/bin gets node, npm and python3 but
 # never uv. This image assembles its own third-party tool venvs under
@@ -179,13 +192,12 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
 #
-# As of v0.21.6 the roster is 11 patches: the 8 the sweep left, plus 033 (a bug the
-# sweep did not cover), 034 (a backport of an upstream fix committed after the tag) and
-# 035 (reaction-hook forwarding, a local feature gap), all added against the same tag --
-# see their blocks below.
-# (This line said 7 through the v2026.9.24 sweep -- already stale then, because 031/032
-# were added without updating it; the real file count at that tag was 9. The v0.21.6
-# sweep corrected it to 8.)
+# As of v0.21.7 (rc.15-v0.21.7) the roster is 10 patches: the 8 the v0.21.6 sweep left,
+# plus 033 (a bug that sweep did not cover) and 035 (reaction-hook forwarding, a local
+# feature gap). 034 was RETIRED on this bump -- it is gone from patches/.
+# `ls patches/*.patch | wc -l` is the truth, not this paragraph: it read 7 through the
+# v2026.9.24 sweep while the disk held 9, and 10 while the disk held 11. Reconcile it
+# against the disk every sweep before trusting any count here.
 # 17 were retired at v2026.9.11 (v0.21.2):
 # 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
 # timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the
@@ -323,7 +335,10 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # moves INFERENCE_BASE_URL into the package __init__ -- the only thing discovery needs from the
 # transport module -- and imports SolsticeClient inside SolsticeProfile.create_client(), so the
 # plugin imports wherever profiles are discovered and the transport loads on first use, in a
-# process that has the app's HTTP stack. RETIRE on the next base bump: upstream main carries it.
+# process that has the app's HTTP stack.
+# RETIRED on the 2026-10-13 (v0.21.7) bump -- see that sweep block above:
+# compare/v0.21.7...51609d82 == "behind" and the tagged source carries the same fix, so
+# this file was deleted from patches/.
 # NOT carried from the same commit: transport.py's `Dict[str, str]` -> `dict[str, str]`
 # annotation normalization (unrelated and cosmetic).
 # Verified: `patch -p1` rc=0 on a pristine 818c13be tree (no fuzz, no .rej/.orig, py_compile +
@@ -352,6 +367,54 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # `--dry-run` rc=0, py_compile clean, ruff check + ruff format clean on the added lines, and
 # check_structure.py asserts the structural delta exactly -- MatrixAdapter 125 -> 127 methods,
 # 1 new top-level function, no class-body indentation drift.
+# 2026-10-13 sweep (rc.15-v0.21.7 / v0.21.7): roster 11 -> 10. This is the base that
+# carries the dependency-generation fix this deployment was waiting for -- upstream
+# fe2b130b, shipped in v0.21.7: pm/recovery.py::_baseline_gaps() compares the image's
+# baked extras against the recorded selection and restores whatever is missing on boot
+# (VERIFIED in the tagged source: 2 hits in pm/recovery.py of a v0.21.7 tree).
+# Drift was checked, not assumed: (a) every patch real-applied to a pristine v0.21.7
+# tree in lexicographic order, (b) upstream issue/PR state plus merge-commit ancestry vs
+# v0.21.7, (c) each flagged bug still present in the tagged source, (d) a per-patch
+# intent assertion on the freshly applied tree.
+# 034 RETIRED -- the backport landed. `gh api compare/v0.21.7...51609d82` == "behind"
+#   (the fix commit IS an ancestor of the tag); the tag's
+#   plugins/model-providers/solstice/__init__.py carries INFERENCE_BASE_URL at module
+#   level and imports SolsticeClient inside create_client() (line 49), and a real
+#   `patch -p1` reports "Reversed (or previously applied) patch detected" -- exactly the
+#   retire condition the 034 block below named. Nothing left to fix, nothing to apply.
+# 011 KEPT, RE-ANCHORED. #85207/#85285 still OPEN, and recover_interrupted_turns() still
+#   promotes a FRESH marker to resume_pending without asking whether the owning PID is
+#   alive -- the detached-restart double loop is still reachable. Exactly one hunk (#4)
+#   failed, on a pure text drift: upstream now writes `datetime.now(UTC)` where the
+#   patch rewrote `datetime.now(timezone.utc)` at the same call site. The hunk was
+#   re-authored against the tagged line (fuzz 0 now, no .rej). Also dropped the quotes
+#   from the new helper's `entry: "SessionEntry"` annotation: the file carries
+#   `from __future__ import annotations`, so ruff UP037 flags them -- the previous sweep
+#   shipped them, ruff check is clean now.
+# 016 KEPT, RE-ANCHORED (the user chose rewrite over retire). #65349/#83036 still OPEN
+#   and upstream still has NO _repair_bare_repo_dirs anywhere in the tree (`grep -rn` = 0
+#   hits, while v2026.9.24 still defined it) -- the patch can no longer lean on a
+#   pristine definition and re-declares the helper, which is what it already did.
+#   Exactly one hunk (#3) failed: upstream's subprocess.run() call grew `check=False,`.
+#   The retry loop was re-authored around the new call. The premise is unchanged -- a
+#   failed/timed-out gc still skips Pruner.reclaim()'s repair entirely.
+# 033 KEPT as-is. v0.21.7 still writes `[project] name = hermes-plugin-<key>` onto a
+#   virtual workspace member without ensuring a version
+#   (pm/workspace.py::_workspace_member), and the patch still applies CLEAN -- itself
+#   the proof it is unfixed: had upstream done it, the hunk would apply REVERSED like
+#   034's did.
+# 007/008/014/015/018/032/035 unchanged in substance, all re-applied at fuzz 0:
+#   #77100 CLOSED-not-merged; #46365, #57546, #72515 and #72847 all CLOSED but with
+#   mergedAt = null (never merged -- the trap this check exists for); #44347, #85713 and
+#   #78888 still OPEN; 018's cited fix commit d4f6e5ac is "diverged" from v0.21.7 (not
+#   an ancestor, so not in the tag); 032/033/035 cite no upstream issue at all.
+# Verified on this bump: 10 x `patch -p1` on a pristine v0.21.7 tree -> rc=0, zero fuzz,
+# zero .rej/.orig, and every touched file BYTE-IDENTICAL to the authored tree (`diff -r`
+# clean). py_compile + compileall clean on all 15 touched files, ruff check clean,
+# check_structure.py clean on both re-anchored files (session_lifecycle 13 -> 13 methods
+# + the new top-level helper present; checkpoint_manager 20 -> 20 methods, no class-body
+# nesting), plus 19 + 7 intent assertions on the re-anchored trees.
+#
 # Previous sweeps:
 # v2026.9.14 / v0.21.3: roster stayed at 8; 7 of 8 re-applied offset-only and
 #   014 was re-anchored (upstream inserted reasoning_config={"enabled": False}
@@ -396,6 +459,10 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   became `_is_fresh_gateway_interruption(...)`. Both are context-only drifts
 #   for 011 -- the old patch still applied, but with fuzz 2 on two hunks, which
 #   is why it was regenerated rather than shipped as-is.
+#   RE-ANCHORED AGAIN on the v0.21.7 bump: upstream switched that same call site to
+#   `datetime.now(UTC)`, which is the exact line hunk #4 rewrites, so the hunk was
+#   re-authored against the tagged text. The new helper's annotation also lost its
+#   quotes (UP037 -- `from __future__ import annotations` is in the file).
 # 014 = upstream #82816/#85713 (open): title_generator unconditionally sent
 #   OpenAI-only response_format json_schema strict -> Console Go / DeepSeek /
 #   Anthropic all 400 ("This response_format type is unavailable now") on every
@@ -439,6 +506,11 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   Depends on 015: its _init_store hunk calls _ensure_store_excludes(), which 015
 #   defines — add and remove the two together. Keep until upstream merges the
 #   bare-repo-dir fix.
+#   RE-ANCHORED AGAIN on the v0.21.7 bump, and REWRITTEN rather than retired (the
+#   user's call): upstream deleted _repair_bare_repo_dirs from the tree entirely (0 grep
+#   hits vs v2026.9.24), so the patch keeps re-declaring it, and hunk #3 was re-authored
+#   around the new `check=False,` in subprocess.run(). The premise held -- the store a
+#   failed gc leaves behind still has no repair path of its own.
 # 018 = hermes-office specific (NOT upstream): named custom providers fronting
 #   the relay (custom:opencode -> proxy IP) flatten to provider "custom" at
 #   runtime, so is_opencode_target misses on BOTH signals; thread

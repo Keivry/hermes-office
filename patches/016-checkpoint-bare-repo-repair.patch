@@ -1,5 +1,4 @@
 diff --git a/tools/checkpoint_manager.py b/tools/checkpoint_manager.py
-index 5d282fc0..caa737d1 100644
 --- a/tools/checkpoint_manager.py
 +++ b/tools/checkpoint_manager.py
 @@ -230,6 +230,28 @@ def _store_has_head(store: Path) -> bool:
@@ -48,7 +47,7 @@ index 5d282fc0..caa737d1 100644
      env = _git_env(store, str(normalized_working_dir), index_file=index_file)
      if extra_env:
          env.update(extra_env)
-@@ -392,22 +424,36 @@ def _run_git(
+@@ -392,23 +424,37 @@ def _run_git(
      try:
          # NUL-delimited git output contains literal filenames, not text lines.
          text_options = {} if "-z" in args else {"text": True, "encoding": "utf-8", "errors": "replace"}
@@ -64,6 +63,7 @@ index 5d282fc0..caa737d1 100644
 -            # console-less desktop/gateway backend; suppress the per-call
 -            # conhost flash on Windows (no-op on POSIX).
 -            creationflags=windows_hide_flags(),
+-            check=False,
 -        )
 -        ok = result.returncode == 0
 -        stdout = os.fsdecode(result.stdout) if "-z" in args else result.stdout.strip()
@@ -82,6 +82,7 @@ index 5d282fc0..caa737d1 100644
 +                # console-less desktop/gateway backend; suppress the per-call
 +                # conhost flash on Windows (no-op on POSIX).
 +                creationflags=windows_hide_flags(),
++                check=False,
 +            )
 +            ok = result.returncode == 0
 +            stdout = os.fsdecode(result.stdout) if "-z" in args else result.stdout.strip()
@@ -101,7 +102,7 @@ index 5d282fc0..caa737d1 100644
          if not ok and result.returncode not in allowed_returncodes:
              logger.error(
                  "Git command failed: %s (rc=%d) stderr=%s",
-@@ -551,6 +597,9 @@ def _init_store(store: Path, working_dir: str) -> Optional[str]:
+@@ -552,6 +598,9 @@ def _init_store(store: Path, working_dir: str) -> Optional[str]:
          _migrate_legacy_store(base)
  
      if (store / "HEAD").exists():

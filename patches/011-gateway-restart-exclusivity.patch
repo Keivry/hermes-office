@@ -1,5 +1,4 @@
 diff --git a/gateway/run_startup.py b/gateway/run_startup.py
-index 902d47d1..7251d264 100644
 --- a/gateway/run_startup.py
 +++ b/gateway/run_startup.py
 @@ -23,6 +23,7 @@ from gateway.delivery import looks_like_telegram_private_chat_id
@@ -44,7 +43,6 @@ index 902d47d1..7251d264 100644
              if self._is_session_running(entry.session_key):
                  continue
 diff --git a/gateway/session.py b/gateway/session.py
-index 3e4776e9..8b1f426b 100644
 --- a/gateway/session.py
 +++ b/gateway/session.py
 @@ -527,6 +527,12 @@ class SessionEntry:
@@ -59,7 +57,7 @@ index 3e4776e9..8b1f426b 100644
 +    active_turn_pid: Optional[int] = None
      # Session-scoped /model override (model/provider/base_url ONLY — never credentials, see
      # sanitize_model_override). Persisted so a restart keeps the chosen model.
-     model_override: Optional[Dict[str, str]] = None
+     model_override: Optional[dict[str, str]] = None
 @@ -565,6 +571,7 @@ class SessionEntry:
          result["last_resume_marked_at"] = _iso(self.last_resume_marked_at)
          result["active_turn_token"] = self.active_turn_token
@@ -90,14 +88,13 @@ index 3e4776e9..8b1f426b 100644
              prompt_pin=sanitize_prompt_pin(data.get("prompt_pin")),
              transport_profile=transport_profile if isinstance(transport_profile, str) and transport_profile else None,
 diff --git a/gateway/session_lifecycle.py b/gateway/session_lifecycle.py
-index 6327e627..b1953e59 100644
 --- a/gateway/session_lifecycle.py
 +++ b/gateway/session_lifecycle.py
 @@ -55,6 +55,37 @@ def auto_continue_freshness_window() -> float:
          return float(_AUTO_CONTINUE_FRESHNESS_SECS_DEFAULT)
  
  
-+def active_turn_owner_alive(entry: "SessionEntry") -> bool:
++def active_turn_owner_alive(entry: SessionEntry) -> bool:
 +    """True when ``entry``'s durable active-turn marker is held by a LIVE process.
 +
 +    The marker is stamped with the owning gateway's PID (``mark_turn_active``).
@@ -162,8 +159,8 @@ index 6327e627..b1953e59 100644
                  return None
              # Aware UTC, unlike the local wall clock elsewhere: the next process compares it with
              # epoch transcript timestamps and may run in another zone (DST, container vs unit TZ).
--            self._set_turn_marker_locked(session_key, entry, token, datetime.now(timezone.utc))
-+            self._set_turn_marker_locked(session_key, entry, token, datetime.now(timezone.utc), os.getpid())
+-            self._set_turn_marker_locked(session_key, entry, token, datetime.now(UTC))
++            self._set_turn_marker_locked(session_key, entry, token, datetime.now(UTC), os.getpid())
          return token
  
      def clear_turn_active(self, session_key: str, token: str) -> bool:

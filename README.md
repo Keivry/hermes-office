@@ -22,7 +22,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.155`
+- Current pinned version in `Dockerfile`: `v1.0.157`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
@@ -38,17 +38,17 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.135.0`
+- Current pinned version in `Dockerfile`: `2.138.0`
 - Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.14.1+cpu` and `torchvision==0.29.1+cpu`
-  2. install `docling==2.135.0` from the normal Python package index
+  2. install `docling==2.138.0` from the normal Python package index
 - The upstream Hermes base image keeps `[tool.uv] exclude-newer = "14 days"` in `/opt/hermes/pyproject.toml`; the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs
 - Since base `v0.21.6` the base image deliberately keeps `uv` off `PATH` (its PM store resolves the pinned binary for dependency preparation only); the Dockerfile re-exposes that same binary via a `/usr/local/bin/uv` symlink for the build and drops the shim once the tool venvs are assembled, so the published image ships no installer on `PATH`
 - Current image installs the base `docling` package (not the optional VLM extras)
 
 ### pdfcpu
 - Installed as a standalone binary at `/usr/local/bin/pdfcpu`
-- Current pinned version in `Dockerfile`: `0.16.1`
+- Current pinned version in `Dockerfile`: `0.16.2`
 - Best suited for open-source PDF CLI operations such as merge, split, validate, optimize, watermark, rotate, forms, and image extraction
 
 ### qpdf
@@ -61,12 +61,12 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 
 ### Bun
 - Installed as a pinned standalone binary at `/usr/local/bin/bun`
-- Current pinned version in `Dockerfile`: `1.4.2`
+- Current pinned version in `Dockerfile`: `1.4.3`
 - Added because ClawMem requires Bun at runtime
 
 ### ClawMem
 - Installed globally as `clawmem` at `/usr/local/bin/clawmem` (installed with npm `--prefix /usr/local`; the base image resolves `node` out of its own PM store, so npm's implicit global prefix no longer points at `/usr/local`)
-- Current pinned version in `Dockerfile`: `0.43.1`
+- Current pinned version in `Dockerfile`: `0.43.3`
 - The Hermes memory provider plugin is staged under `/opt/tools/clawmem-plugin`
 - On container start, the s6 cont-init.d hook syncs that plugin into `$HERMES_HOME/plugins/clawmem`
 - The image defaults to **external-model / remote-GPU** style operation:
