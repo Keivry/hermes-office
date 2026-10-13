@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS item(
   kind              TEXT NOT NULL CHECK(kind IN('task','repeat','date')),
   status            TEXT NOT NULL DEFAULT 'open' CHECK(status IN('open','done','dropped')),
   due_at            TEXT,                                       -- task: 'YYYY-MM-DD[ HH:MM]'
+  next_due_at       TEXT,                                       -- after: 的运行期锚点（完成日+N）；every: 恒 NULL
   calendar          TEXT NOT NULL DEFAULT 'solar' CHECK(calendar IN('solar','lunar')),
   lunar_month       INTEGER,                                    -- date+lunar 时必填
   lunar_day         INTEGER,
@@ -321,8 +322,14 @@ react  --action add|remove [--emoji E] [--msg-event-id X] [--reaction-event-id Y
 selftest
 ```
 
-`--rule SPEC` 语法：`weekly:1` / `biweekly:3` / `monthly:1` / `monthly:-1`(月末) / `yearly:5-1`
-（周几 1=周一 … 7=周日；`monthly:-1` = 该月最后一天）。
+`--rule SPEC` 语法：`weekly:1` / `biweekly:3` / `monthly:1` / `monthly:-1`(月末) / `yearly:5-1` /
+`every:60d`(固定节奏，未完成也照常出下一期) / `after:60d`(完成后起算，证书续签这类)
+（周几 1=周一 … 7=周日；`monthly:-1` = 该月最后一天；间隔单位 `d`/`w`/`m`/`y`，**可省 = 天**）。
+
+`every:` / `after:` 的首个日期同样用 `--due`（不写 = 今天），运行期锚点另有口径：
+`every:` 恒用「首次日期 + k×N」（`item.next_due_at` 为 NULL）；`after:` 的锚点是**完成日 + N**
+（存在 `item.next_due_at`，完成时推进、撤销时回退）。两者的 `--lead` 默认取 `TODO_LEAD_INTERVAL`
+（未设 = 0），其余规则仍用 `TODO_DEFAULT_LEAD_*`（详见文末「更新记录（2026-10-13）：间隔重复规则」）。
 
 `--due` 的公历日期接受 `YYYY-MM-DD` 与 `MM-DD`：后者由 `_normalize_due()` 补成「下一个未到的
 该月日」（含今天；`2-29` 落在非闰年时往后找闰年）。`add` 与 `edit` 走同一校验，非法日期
@@ -367,6 +374,7 @@ TODO_ROOM_PERSONAL=!待用户提供:mt.keivry.ren
 TODO_OWNER_USER=@keivry:mt.keivry.ren
 TODO_DEFAULT_LEAD_ANNIVERSARY=7
 TODO_DEFAULT_LEAD_TASK=0
+TODO_LEAD_INTERVAL=0
 TODO_MAX_CAPSULES=10
 TODO_MATRIX_ENV_FILE=/opt/data/env/matrix-send/environment
 TODO_SEND_PY=/opt/data/scripts/matrix-send/send_message.py
@@ -536,6 +544,32 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 
 ---
 
+## 更新记录（2026-10-13）：间隔重复规则 `every:` / `after:`（schema v2 → v3）
+
+**动机**：`repeat` 原本只有「周/月/年」这类日历规则，缺「隔多长时间重复一次」。典型场景是 **SSL 证书续签**：
+完成之后过一段时间才需要再次提醒（完成日 + N），而不是固定日历日。
+
+1. 规则新增两条（语义由名字承载，不加 `--anchor` 参数）：`every:Nd` = **固定节奏**
+   （期次 = 锚点 + k×N，未完成也照常出下一期）、`after:Nd` = **完成后起算**（锚点 = 完成日，完成后推 N）。
+   单位 `d`/`w`/`m`/`y`（可省 = 天，`every:1w` ≡ `every:7d`）；首个日期用 `--due`（不写 = 今天）；
+   `--lead` 默认取 `TODO_LEAD_INTERVAL`（未设 = 0）。
+2. 存储：`item` 增 `next_due_at TEXT`（`after:` 的运行期锚点；`every:` 恒 NULL）→ **schema v2 → v3**，
+   幂等 `ALTER TABLE … ADD COLUMN`；迁移在 `store.ensure()` 里跑，`doctor` 只读、不触发迁移。
+3. 完成 / 撤销：`store.complete(next_due_at=)` 推进锚点；`store.undo_complete(reset_anchor=)` 回退锚点
+   并清掉「完成时算出来的那一期」（除被撤销那期外的所有 pending，已发过提醒的置 `skipped`），
+   同时把落在新锚点上的 `skipped` 复活为 `pending`；完成行追加 `· ↻ 下次 YYYY-MM-DD`。
+4. 校验口径与 `--due` 对齐：非法 / 超大间隔（含首期推不出来）在 `add`/`edit` 即报
+   `❌ 重复规则不合法：…` + **rc=2、不入库**；`done --date` 早于条目创建日报 rc=2；补记导致 `ack+N`
+   已过期时把锚点钳到今天并在回执里说明。`materialize()` **逐条目隔离**：单条脏规则只进 `errors[]`
+   （tick 因 `errors` 非空返回 rc=1 —— cron wake-gate 语义），不再让整轮 tick 停摆。
+5. `describe_rule`：`every:2w` → 「每 2 周」（不再折算成 14 天）；`HELP_TEXT` 与 `add/edit --help` 同步。
+
+**验证（实跑）**：`pytest tests` **49 passed**（原 15 + interval 26 + 审查回归 8）；`unittest -p '*_test.py'`
+49 OK；`ruff check` / `format --check` 通过；`selftest` ✓；真实库 v2 → v3 迁移后行数逐项一致、两库仍非 WAL、
+`doctor --reconcile` 全 ✓。
+
+---
+
 ## 上线配置（2026-10-12，已生效）
 
 ### 房间
@@ -560,7 +594,8 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
   `TODO_SLOT_MODE_ANNIVERSARY=all` 可改成按时段各提醒一次。
 - **「未来 7 天」预览行**：只在当天第一个时段出现，免得一天刷三遍。
 - **老库自动迁移**：`_migrate()` 检测 `reminder` 缺 `slot` 列 → 重建表并把老行补 `slot='day'`
-  （迁移在写 `schema_version` 之前，失败就不会被标成新版本）。真实两库已升到 v2。
+  （迁移在写 `schema_version` 之前，失败就不会被标成新版本）。真实两库已升到 **v3**
+  （v1 → v2 = `slot` 时段维度；v2 → v3 = `item.next_due_at`，见上一条更新记录）。
 
 ### cron
 
