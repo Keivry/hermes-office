@@ -283,6 +283,8 @@ def record_event(con, action, *, item=None, occ=None, before=None, after=None, c
 /todo add 买牛奶 今天 个人              # 位置参数由 todo.py 解析
 /todo add --kind repeat --rule weekly:1 --title 周会材料 --category work
 /todo add --kind date --calendar lunar --lunar 8-15 --lead 7 --title 妈妈生日
+/todo add --kind date --due 03-15 --title 老婆生日 --category personal
+                                        # 公历生日；--due 可省年份，date 默认 lead=7
 /todo list [--category work] [--all] [--json]
 /todo today [--category work]
 /todo done 3        # 也接受 #3
@@ -297,7 +299,7 @@ CLI 完整签名（`todo.py`，argparse）：
 # 全局审计参数（挂在一个 add_help=False 的 parent parser 上，顶层与各子命令都接受）
 --source S --actor U --actor-name N --room R
 
-add    --title/位置参数  [--kind task|repeat|date] [--category C] [--due "YYYY-MM-DD[ HH:MM]"]
+add    --title/位置参数  [--kind task|repeat|date] [--category C] [--due "YYYY-MM-DD[ HH:MM] | MM-DD"]
        [--rule SPEC] [--lead N] [--calendar solar|lunar] [--lunar M-D] [--notes S]
        [--priority 1|2|3] [--room !room:server]
 edit   ID [--title T] [--due D] [--rule SPEC] [--lead N] [--category C] [--priority N]
@@ -321,6 +323,10 @@ selftest
 
 `--rule SPEC` 语法：`weekly:1` / `biweekly:3` / `monthly:1` / `monthly:-1`(月末) / `yearly:5-1`
 （周几 1=周一 … 7=周日；`monthly:-1` = 该月最后一天）。
+
+`--due` 的公历日期接受 `YYYY-MM-DD` 与 `MM-DD`：后者由 `_normalize_due()` 补成「下一个未到的
+该月日」（含今天；`2-29` 落在非闰年时往后找闰年）。`add` 与 `edit` 走同一校验，非法日期
+（如 `13-45` / `2026-02-30`）报 `❌ --due 不合法：…` 且 **rc=2、不入库**（详见文末「更新记录（2026-10-13）」）。
 
 ### 5.2 提醒消息模板（每房一条，胶囊 ≤10，超出分页）
 
@@ -447,7 +453,8 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 
 代码位置 `/opt/data/scripts/todo/`：`todo.py`（CLI 全量子命令）、`store.py`（两库/审计/对账）、
 `sched.py`（农历/重复规则/选取）、`render.py`（渲染与胶囊）、`matrix_edit.py`（`m.replace`）、
-`notify.py`（发送/编辑）、`tick.py`（cron 入口）；测试 `tests/`（46 条）。
+`notify.py`（发送/编辑）、`tick.py`（cron 入口）；测试 `tests/`（2 个文件 / 15 条：
+`react_test.py` + `add_test.py`）。
 
 ### 与本文档的偏差（都是有原因的选择，不是遗漏）
 
@@ -480,14 +487,14 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
    那个反应**的 id —— 而那个 id 已经被「完成」那次写进 `reaction_seen`（主键）。若拿它再插一次判重，
    `INSERT OR IGNORE` 会直接判成「已处理过」，**撤销永远不会生效**。所以 hook 额外传 `--redaction-event-id`
    （本次撤回事件的 id）作幂等键，`--reaction-event-id` 只用于反查原完成记录。
-   这个 bug 是离线端到端测试（`tests/test_react.py`）抓出来的 —— 单元测试只看单点行为不会暴露它。
+   这个 bug 是离线端到端测试（`tests/react_test.py`）抓出来的 —— 单元测试只看单点行为不会暴露它。
    另外：审计里存**客户端原样的** emoji（保留 VS16），只用归一化后的形态做匹配，别把原样形态丢掉。
 
 ### 关键验证证据（都是实跑）
 
 | 项目 | 证据 |
 | --- | --- |
-| 单测 | `python -m unittest discover -s tests` → `Ran 59 tests ... OK`（含 6 条点击语义、7 条时段/迁移端到端） |
+| 单测 | `python -m unittest discover -s tests -p '*_test.py'` → `Ran 15 tests ... OK`（6 条点击语义 + 9 条 `--due` 校验）。**必须带 `-p '*_test.py'`**：两个文件都按 `*_test.py` 命名（避开 disk-cleanup 对 `test_*` 的跟踪），默认 `test*.py` 模式会跑 0 条（退出码 5，不会静默通过） |
 | 代码风格 | `ruff check .` + `ruff format --check .` 全过 |
 | 跨库原子（rollback journal） | 实证 0/50 漂移；WAL 33/50 漂移 → 铁律写进 `open_db()` + 单测 + `doctor` |
 | 历史不可篡改 | `sqlite3.set_authorizer` 按 `db_name=="hist"` 拒绝 UPDATE/DELETE，`main` 照常 |
@@ -498,6 +505,34 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 | 备份 | 白名单含两库；`VACUUM INTO` 快照；恢复演练 `integrity_check=ok` + 表齐 + `schema_version` |
 | 插件 | `hermes plugins doctor` rc=0、`validate` 「Validation passed.」、无内置命令冲突、已 enable |
 | hook | AST OK + `HOOK.yaml` events 解析为 `['reaction:added','reaction:removed']` |
+
+---
+
+## 更新记录（2026-10-13）：`--due` 校验与可选年份
+
+**问题（静默死条目）**：`--due 03-15` 原本 rc=0、回执「已添加」，但 `due_at` 原样存成 `'03-15'` →
+`sched.date_of()` 解析不出（返回 `None`）→ 纪念日 `anniversary_month_day()` = `(None, None)` →
+**该条目永远不产生提醒，`tick` 也不报错**（`errors: []`），`list` 里显示成光秃秃的「纪念日」。
+
+**修法**（`todo.py`，代码仓 commit `4619175`）：
+
+1. 新增 `_normalize_due(text, today)`：`YYYY-MM-DD` 原样保留；`MM-DD` 补成「下一个未到的该月日」
+   （含今天；`2-29` 落在非闰年时往后找闰年）；非法日期抛 `ValueError` → CLI 返回 `Result(…, 2)`
+   → **rc=2 且不入库**。
+2. `add` 与 `edit` 的 `--due` 统一走该校验（`kind=task` 同样受益，避免同类死条目）。
+3. `kind=date` 的两条既有用法错误（缺日期、`--lunar` 与 `--due` 二选一）由「打印提示 + rc=0」改为 **rc=2**。
+   其余「参数错误只打印提示、rc 仍为 0」的路径属既有约定，本次未动。
+4. `HELP_TEXT` 纪念日行补 `--due MM-DD` 写法与「`--lead` 默认 7」（`store.default_lead('date') == 7`，
+   与 §1 产品决策「纪念日提前 7 天」一致）。
+
+**验证**（实跑）：`pytest tests` 15 passed；`unittest -p '*_test.py'` 15 OK；`selftest` ✓；
+真实库 `doctor --reconcile` 全 ✓（只读体检，两库 mtime 未变）；`HELP_TEXT` 四路径逐字一致；
+`ruff check` + `ruff format --check` 通过。新增 `tests/add_test.py`（9 条）：`MM-DD` 补全 / 闰日 /
+`task` 同口径 / `edit` 同口径 / 非法 rc=2 且不入库 / **「生日前 3 天真的进提醒」防死条目回归**。
+
+行为示例（今天 2026-10-13）：`/todo add 老婆生日 --kind date --due 03-15 --category personal`
+→ 落库 `2027-03-15`、`lead_days=7`；`tick --dry-run --date 2027-03-12` 输出
+`1️⃣ 老婆生日（3 天后 · 03-15）`。
 
 ---
 
