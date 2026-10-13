@@ -132,15 +132,18 @@ CREATE TABLE IF NOT EXISTS occurrence(
   UNIQUE(item_id, occurrence_date)
 );
 
--- 已发出的提醒：一个 (期次,日期) 只发一次 → 幂等
+-- 已发出的提醒：一个 (期次,日期,时段) 只发一次 → 幂等
 CREATE TABLE IF NOT EXISTS reminder(
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   occurrence_id INTEGER NOT NULL REFERENCES occurrence(id) ON DELETE CASCADE,
   notify_date   TEXT NOT NULL,
+  -- 时段维度：一天跑多次 tick（早/中/晚）时每个时段各发一次；
+  -- 纪念日固定写 'day' → 一天最多一行（TODO_SLOT_MODE_ANNIVERSARY=all 才按时段）。
+  slot          TEXT NOT NULL DEFAULT 'day',
   room          TEXT NOT NULL,
   event_id      TEXT,                                           -- 那条汇总消息
   sent_at       TEXT NOT NULL,
-  UNIQUE(occurrence_id, notify_date)
+  UNIQUE(occurrence_id, notify_date, slot)
 );
 
 -- 胶囊 → 条目映射（持久化，无 TTL；重启网关后照样能点）
@@ -376,6 +379,8 @@ TODO_DEFAULT_LEAD_ANNIVERSARY=7
 TODO_DEFAULT_LEAD_TASK=0
 TODO_LEAD_INTERVAL=0
 TODO_MAX_CAPSULES=10
+TODO_TICK_SLOTS=09,12,20
+TODO_SLOT_MODE_ANNIVERSARY=day
 TODO_MATRIX_ENV_FILE=/opt/data/env/matrix-send/environment
 TODO_SEND_PY=/opt/data/scripts/matrix-send/send_message.py
 TODO_SEND_PYTHON=/opt/hermes/.venv/bin/python
@@ -428,13 +433,13 @@ TODO_HISTORY_DEFAULT_LIMIT=30
 /opt/data/scripts/todo/matrix_edit.py   m.replace（stdlib urllib，读同一 env 文件）
 /opt/data/scripts/todo/notify.py        发送（包 send_message.py，回收 event_id）
 /opt/data/scripts/todo/tick.py          cron 入口（纯 stdlib 启动器，wake-gate）
-/opt/data/scripts/todo/tests/test_sched.py
-/opt/data/scripts/todo/tests/test_store.py
-/opt/data/scripts/todo/tests/test_render.py
-/opt/data/scripts/todo/tests/test_cli.py
-/opt/data/scripts/todo/tests/test_history.py        ← 审计历史（T2b / T6b / T9b）
+/opt/data/scripts/todo/tests/react_test.py          ← 点击语义 + 完成/撤销/幂等（T9）
+/opt/data/scripts/todo/tests/add_test.py            ← 建库与 --due / 农历校验
+/opt/data/scripts/todo/tests/interval_test.py       ← every: / after: 间隔规则 + 审查回归（T16）
 /opt/data/state/todo/history.db                     ← 历史库（运行时自动创建；永久保留）
-/opt/data/scripts/todo/tests/test_matrix_edit.py
+（设计阶段的 `test_sched/test_store/test_render/test_cli/test_history/test_matrix_edit` 六个文件
+ 未按原计划拆分：实现按「一个测试类一个文件」收敛成上面三个，且一律 `*_test.py` 命名
+ —— 躲开 disk-cleanup 对 `test_*` 的跟踪，所以 `unittest` 必须带 `-p '*_test.py'`。）
 /opt/data/env/todo/environment
 /opt/data/hooks/todo-reaction/HOOK.yaml
 /opt/data/hooks/todo-reaction/handler.py
@@ -461,8 +466,8 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 
 代码位置 `/opt/data/scripts/todo/`：`todo.py`（CLI 全量子命令）、`store.py`（两库/审计/对账）、
 `sched.py`（农历/重复规则/选取）、`render.py`（渲染与胶囊）、`matrix_edit.py`（`m.replace`）、
-`notify.py`（发送/编辑）、`tick.py`（cron 入口）；测试 `tests/`（2 个文件 / 15 条：
-`react_test.py` + `add_test.py`）。
+`notify.py`（发送/编辑）、`tick.py`（cron 入口）；测试 `tests/`（**当日** 2 个文件 / 15 条：
+`react_test.py` + `add_test.py`；现为 3 个文件 / 53 条，见文末更新记录）。
 
 ### 与本文档的偏差（都是有原因的选择，不是遗漏）
 
@@ -502,7 +507,7 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 
 | 项目 | 证据 |
 | --- | --- |
-| 单测 | `python -m unittest discover -s tests -p '*_test.py'` → `Ran 15 tests ... OK`（6 条点击语义 + 9 条 `--due` 校验）。**必须带 `-p '*_test.py'`**：两个文件都按 `*_test.py` 命名（避开 disk-cleanup 对 `test_*` 的跟踪），默认 `test*.py` 模式会跑 0 条（退出码 5，不会静默通过） |
+| 单测 | `python -m unittest discover -s tests -p '*_test.py'` → `Ran 15 tests ... OK`（**2026-10-12 当时**的 6 条点击语义 + 9 条 `--due` 校验；现为 `Ran 53 tests ... OK`，见文末更新记录）。**必须带 `-p '*_test.py'`**：两个文件都按 `*_test.py` 命名（避开 disk-cleanup 对 `test_*` 的跟踪），默认 `test*.py` 模式会跑 0 条（退出码 5，不会静默通过） |
 | 代码风格 | `ruff check .` + `ruff format --check .` 全过 |
 | 跨库原子（rollback journal） | 实证 0/50 漂移；WAL 33/50 漂移 → 铁律写进 `open_db()` + 单测 + `doctor` |
 | 历史不可篡改 | `sqlite3.set_authorizer` 按 `db_name=="hist"` 拒绝 UPDATE/DELETE，`main` 照常 |
@@ -556,8 +561,10 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 2. 存储：`item` 增 `next_due_at TEXT`（`after:` 的运行期锚点；`every:` 恒 NULL）→ **schema v2 → v3**，
    幂等 `ALTER TABLE … ADD COLUMN`；迁移在 `store.ensure()` 里跑，`doctor` 只读、不触发迁移。
 3. 完成 / 撤销：`store.complete(next_due_at=)` 推进锚点；`store.undo_complete(reset_anchor=)` 回退锚点
-   并清掉「完成时算出来的那一期」（除被撤销那期外的所有 pending，已发过提醒的置 `skipped`），
+   并清掉「完成时算出来的那一期」（= 当前锚点那一期 + 锚点之后的期次；已发过提醒的置 `skipped`），
    同时把落在新锚点上的 `skipped` 复活为 `pending`；完成行追加 `· ↻ 下次 YYYY-MM-DD`。
+   （清理范围在二轮审查中收窄过：原来扫掉「所有 pending」，会连补记场景下用户本来就逾期的那一期
+   一起删掉 —— 见下一条更新记录。）
 4. 校验口径与 `--due` 对齐：非法 / 超大间隔（含首期推不出来）在 `add`/`edit` 即报
    `❌ 重复规则不合法：…` + **rc=2、不入库**；`done --date` 早于条目创建日报 rc=2；补记导致 `ack+N`
    已过期时把锚点钳到今天并在回执里说明。`materialize()` **逐条目隔离**：单条脏规则只进 `errors[]`
@@ -567,6 +574,30 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 **验证（实跑）**：`pytest tests` **49 passed**（原 15 + interval 26 + 审查回归 8）；`unittest -p '*_test.py'`
 49 OK；`ruff check` / `format --check` 通过；`selftest` ✓；真实库 v2 → v3 迁移后行数逐项一致、两库仍非 WAL、
 `doctor --reconcile` 全 ✓。
+
+---
+
+## 更新记录（2026-10-13 二轮审查）：再修 4 处缺陷
+
+对第一轮修复（`4286a70`）做第二轮对抗验证（修复落地核对 + **mutation 验红** + 残留猎杀 + 文档口径核对），
+又抓到 4 条真缺陷，全部修复，并各配一条**改前必红**的回归用例（`interval_test.py` 3 条 + `react_test.py` 1 条）：
+
+1. **提前完成下一期 → 条目永久静默死亡**（`after:` 专用）：在 `lead` 窗口内点胶囊完成「下一期」时，
+   `ack + N` 正好等于刚完成那期的日期 → 锚点原地打转，`materialize` 找不到可提醒的期次。
+   修法：锚点改为 `max(完成日, 被完成期次日) + N`，并加「锚点不得落在**已完成**期次上」的护栏。
+2. **`yearly` 的月/日不校验**：`yearly:13-1` / `yearly:0-0` 照样入库（`yearly:5-40` 被静默夹成 `5-31`），
+   之后**每天** tick 都抛裸 `bad month number 13` → 整轮 rc=1、条目永不出期次。修法：与 `monthly` 同口径，
+   入口校验「月 1–12、日 1–31」→ `❌ 重复规则不合法：…` + rc=2、不入库。
+3. **撤销会删掉无关的逾期期次**：`undo` 的清理范围从「所有 pending」收窄为「本次完成派生的那一期
+   （= 当前锚点）+ 锚点之后的期次」，锚点回退到「被撤销那期日期；若还有更早的未完成期次就以它为准」。
+4. **`react` 不传 `--room` 会崩**：完成**已经落库**之后才 `AttributeError`（rc=1、回执丢失）→
+   改 `getattr(args, "room", "")`。
+
+另修一处**注释与代码相反**（`store.complete` 里「复活 skipped」那段注释写成了「不复活」）。
+
+**验证（实跑）**：`pytest tests` **53 passed**（49 + 本轮 4 条回归）；`unittest -p '*_test.py'` → 53 OK；
+4 条新用例在改前代码（`4286a70`）上 **4/4 全红**；`ruff check` / `format --check` 通过；真实两库未被本轮触碰
+（mtime 不变）。
 
 ---
 
