@@ -446,8 +446,26 @@ TODO_HISTORY_DEFAULT_LIMIT=30
 **新建**
 
 ```
-/opt/data/scripts/todo/todo.py          CLI 入口（argparse，子命令分发）
-/opt/data/scripts/todo/store.py         DB 打开/建表/CRUD/幂等写入
+/opt/data/scripts/todo/todo.py          CLI 入口（docstring/sys.path/--html-out 落盘/main）
+/opt/data/scripts/todo/todo_common.py   公共小工具：Result / 审计上下文 / 编号（行号↔#id）/ 归属与房间
+/opt/data/scripts/todo/todo_view.py     纯文本视图：item_line / item_brief（HTML 渲染在 render.py）
+/opt/data/scripts/todo/todo_rules.py    重复规则与锚点：日期词/规则解析、算下一期、完成与撤销语义
+/opt/data/scripts/todo/todo_items.py    add / edit / list / done / undo / rm / purge
+/opt/data/scripts/todo/todo_tick.py     物化期次 + 预览 + 按房发送 + 提醒幂等键（tick / today）
+/opt/data/scripts/todo/todo_react.py    胶囊反应 → 就地编辑原消息（m.replace）
+/opt/data/scripts/todo/todo_query.py    history / show / log / export-history
+/opt/data/scripts/todo/todo_health.py   doctor / selftest
+/opt/data/scripts/todo/todo_cli.py      HELP_TEXT / _HelpParser / build_parser
+/opt/data/scripts/todo/store/           存储层包（门面 + 8 模块，见下）
+    __init__.py    门面：显式 re-export 全部对外名（import store; store.X(...) 契约不变）
+    config.py      环境/路径：读 env/todo/environment、两库路径与默认值
+    db.py          连接/建表/迁移/事务（DDL、open_db、transaction、_conn/_now 等包内公用件）
+    events.py      审计写入：record_event（历史库唯一写入口）+ 条目快照与 diff
+    items.py       item / occurrence：增查改软删物理删、期次读写、状态机
+    anchor.py      锚点原语：complete / undo_complete
+    reminder.py    reminder / reminder_key / reaction_seen：提醒幂等、胶囊去重、消息↔条目
+    audit.py       审计读取：历史三源合并、计数、JSONL/CSV 导出与格式
+    health.py      doctor（两库体检 + 对账）/ item_title / today_str
 /opt/data/scripts/todo/sched.py         日期与农历、重复规则、期次物化、提醒选取
 /opt/data/scripts/todo/render.py        消息渲染 + 胶囊分配 + 点击后重渲染
 /opt/data/scripts/todo/matrix_edit.py   m.replace（stdlib urllib，读同一 env 文件）
@@ -696,8 +714,49 @@ undo 1                     →  期次 1/2026-10-20/pending  2/2027-10-20/pendin
 `tick --dry-run` rc=0 `errors:[]`；个人房实发 11 条测试条目 → 2 页提醒、`formatted_body` 全 `<p>`、
 零 h1，模拟点击后 `m.replace` 两层都带富文本（测试消息与回执已按用户要求 redact）。
 
-**未做（需要用户拍板）**：`store.py`(1650 行) / `todo.py`(1569 行) 越过「单文件 >1000 行」阈值的拆分、
-`build_parser`(153 行) 的按子命令拆分 —— 属批量重构，先出映射方案再动（用户既有规则：批量重构前先确认改法）。
+**当时未做**：`store.py`(1650 行) / `todo.py`(1679 行) 越过「单文件 >1000 行」阈值的拆分 —— 已于同日
+按映射方案落地，见下一条更新记录。
+
+## 更新记录（2026-10-14 二轮）：结构重构（store 包 + todo 家族，零行为变更）
+
+**起因**：`store.py` 1650 行 / `todo.py` 1679 行越过「单文件 ≤1000 行」红线，`build_parser` 单函数 153 行。
+用户拍板：**方案 A（按职责细切）+ 两期一起做**。
+
+**改法（纯搬迁）**：`store.py` → `store/` **包**（门面 `__init__.py` + 8 模块，最大 344 行）；
+`todo.py` → 薄入口（96 行）+ 8 个 `todo_*.py`（最大 369 行）。拆分依据先落成映射方案
+（`cache/scratch/todo_split/PLAN.md`：逐符号归属表 + 风险对策 + 验收清单），映射用 AST 做覆盖自检
+（`store` 76/76、`todo` 71/71，无遗漏、无重复）。
+
+**为什么 store 必须是包**：`import store` + `store.X(...)` 是既有对外契约（`todo_*.py`、`notify.py`、
+测试进程内都在用）。包门面逐个点名 re-export，调用方**一行都不用改**。副作用要防：包内模块名与
+同名函数会互相遮蔽，所以 `env/doctor/history` 三个模块名分别改叫 `config/health/audit`
+（`store.env()` / `store.doctor` / `store.history` 仍是函数）。
+
+**为什么 `todo_*.py` 用前缀而不是也做包**：这些模块只被 CLI 子进程 import（全仓 `import todo` 0 处），
+不进 gateway 进程，裸名冲突面为零；前缀同时避开与 stdlib 撞名（本目录原有的 `sched.py` 就是同类坑）。
+
+**零行为变更的证据（实跑）**：
+1. **147 个原符号 AST 逐字对比**（`ast.unparse` 归一化前后）→ **零缺失、零差异**（唯一新增是门面的 `__all__`）；
+2. **CLI 基线 43 条命令**（help/list/today/show/history/log/doctor/export/tick/selftest + 写路径 + 越界错误路径，
+   在真实库副本上跑）：拆分**前 = 期 1 = 期 2 三次快照逐字节一致**（rc 也一致）；
+3. `pytest scripts/todo/tests -q` → **76 passed, 5 subtests**（原 74 + 新增 2 条守护：store 包纯度、
+   门面覆盖现状调用面）；期 1 单跑亦绿；
+4. `help` 五路 sha256 仍**完全相同**、2751 字节、0 行首 `#`；`selftest` / `doctor --reconcile` /
+   `tick --dry-run` rc=0（真实库 item=11 / occurrence=139 / item_event=38 未变）；`store.__file__` 指向
+   `store/__init__.py`；19 个新模块**逐个单独 import** 成功（查循环导入）。
+
+**踩到的两个坑（生成器 bug，都当场修掉）**：① 按 `node.lineno` 切片会**丢掉装饰器**
+（`@contextlib.contextmanager` → `transaction` 变成普通生成器函数，`with transaction(con)` 直接
+`TypeError`）；② 入口的 `if __name__ == "__main__"` **不是符号**，不补回就「跑完什么都不输出、rc=0」。
+
+**测试守护同步**：`test_only_wrappers_call_store_complete` 的源码扫描从「只读 `todo.py`」改为
+「入口 + 全部 `todo_*.py`」（原意不变：全家只允许 2 处 `store.complete(` / 1 处 `store.undo_complete(`）。
+
+**门禁范围**：ruff 从「逐个列文件」改为目录形式 `todo.py todo_*.py store/ tests/ plugins/todo`
+（上一轮踩过：新增文件不在门禁里）。
+
+**未做（沿用）**：`build_parser` 仍是一个 153 行的函数——按子命令再拆会引入参数定义与 handler 的
+位置耦合，收益不抵风险，留作既有项。
 
 ## 上线配置（2026-10-12，已生效）
 
