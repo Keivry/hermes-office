@@ -301,30 +301,45 @@ CLI 完整签名（`todo.py`，argparse）：
 
 ```
 # 全局审计参数（挂在一个 add_help=False 的 parent parser 上，顶层与各子命令都接受）
---source S --actor U --actor-name N --room R
+--source S --actor U --actor-name N --room R --html-out PATH
+#   --html-out 只对报表型命令（list/today/show/history）写文件；list --json 与回执/help 明确不写
 
 add    --title/位置参数  [--kind task|repeat|date] [--category C] [--due "YYYY-MM-DD[ HH:MM] | MM-DD"]
        [--rule SPEC] [--lead N] [--calendar solar|lunar] [--lunar M-D] [--notes S]
-       [--priority 1|2|3] [--room !room:server]
-edit   ID [--title T] [--due D] [--rule SPEC] [--lead N] [--category C] [--priority N]
-       [--notes S] [--calendar solar|lunar] [--lunar M-D] [--room R]
+       [--priority N] [--item-room !room:server]
+edit   ID|#ID [--title T] [--due D] [--rule SPEC] [--lead N] [--category C] [--priority N]
+       [--notes S] [--calendar solar|lunar] [--lunar M-D] [--item-room R]
 list   [--category C] [--kind K] [--all] [--json]
 today  [--category C]
-show   ID                                  # 当前状态 + 历史时间线
-history [ID] [--limit 50] [--all]          # 无 ID = 全库最近 N 条（跨库合并）
+show   ID|#ID                              # 当前状态 + 历史时间线
+history [ID|#ID] [--limit 30] [--all]      # 无 ID = 最近 N 条（跨库合并；N=TODO_HISTORY_DEFAULT_LIMIT，默认 30）
 log    [--since D] [--until D] [--action A] [--category C] [--json]
 export-history --out F [--since D] [--until D] [--format jsonl|csv]   # 归档（历史库专用）
 doctor [--reconcile]                       # 两库健康检查 / 对账（见 T9c）
-done   ID | #ID     [--date YYYY-MM-DD]     # --date = 补记的完成日：先认 ≤ 该日最早的未完成期次，
+done   ID|#ID     [--date YYYY-MM-DD]      # --date = 补记的完成日：先认 ≤ 该日最早的未完成期次，
                                            #   没有才按期建行（回执写「期次 X · 补记日 D」）
-undo   ID | #ID
-rm     ID                                  # 软删（写 delete 事件）
-purge  ID --yes                            # 物理删（写 purge 事件，历史保留）
+undo   ID|#ID
+rm     ID|#ID                              # 软删（写 delete 事件）
+purge  ID|#ID --yes                        # 物理删（写 purge 事件，历史保留）
 tick   [--dry-run] [--date YYYY-MM-DD] [--category C]
 react  --action add|remove [--emoji E] [--msg-event-id X] [--reaction-event-id Y]
        [--user U] [--room R]
 selftest
 ```
+
+**编号（2026-10-14 起）**：纯数字 = **`/todo list` 的行号**（未删条目按 `(priority, id)` 排序的第 N 行，
+实现见 `todo.py:_numbering_rows()`；显示与解析共用这一份，过滤视图里显示的也是**全局**行号）；`#N` =
+条目 id（`AUTOINCREMENT`，删除后不复用，永远精确）。7 个入口（`edit/show/history/done/undo/rm/purge`）
+同口径：越界/非法报 `❌ …` 且 **rc=2、零写入**；已删条目**不占行号**，在 `list --all` 里显示成 `(已删) #id`。
+
+**退出码（2026-10-14 统一）**：`0` 成功 · `1` 内部错误 · `2` 没做成（所有 `❌` 开头的提示：编号越界/非法、
+无变更、缺参数、已是目标状态）。脚本/cron 按退出码判断，不要再返回「错误串 + rc=0」。
+
+**报表自带 HTML（2026-10-14）**：`list`/`today`/`show`/`history` 生成 Element X 友好的 HTML
+（`render.doc_to_html` / `text_to_html`，词汇表只有 `<p>`/`<strong>`），由 `--html-out` 落盘、插件经
+`send_report.py` 子进程直发，**不交网关 markdown 渲染** —— 行首 `#` 会被 markdown 当 H1（Android 上
+巨大字号 + 行距丢失，就是本轮修的 bug）。同一份 HTML 的纯文本兜底 body 由 `render.html_to_text` 统一给
+（发送与 `m.replace` 共用），超 48KiB 按整段截断并附说明。
 
 `--rule SPEC` 语法：`weekly:1` / `biweekly:3` / `monthly:1` / `monthly:-1`(月末) / `yearly:5-1` /
 `every:60d`(固定节奏，未完成也照常出下一期) / `after:60d`(完成后起算，证书续签这类)
@@ -367,6 +382,10 @@ selftest
 ...
 已更新 09:12 · 剩 2 项
 ```
+
+消息以 **HTML** 发出（`formatted_body`，只 `p`/`strong`），`body` 是同一份 HTML 经
+`render.html_to_text` 反推的纯文本兜底；`m.replace` 的**顶层与 `m.new_content` 两层都带**
+`format`/`formatted_body`（上面两段是等价的纯文本视图）。
 
 ### 5.3 配置文件 `/opt/data/env/todo/environment`
 
@@ -434,12 +453,15 @@ TODO_HISTORY_DEFAULT_LIMIT=30
 /opt/data/scripts/todo/matrix_edit.py   m.replace（stdlib urllib，读同一 env 文件）
 /opt/data/scripts/todo/notify.py        发送（包 send_message.py，回收 event_id）
 /opt/data/scripts/todo/tick.py          cron 入口（纯 stdlib 启动器，wake-gate）
+/opt/data/scripts/todo/send_report.py   插件发送入口（纯 stdlib 启动器；报表 HTML 直发，2026-10-14）
 /opt/data/scripts/todo/tests/react_test.py          ← 点击语义 + 完成/撤销/幂等（T9）
 /opt/data/scripts/todo/tests/add_test.py            ← 建库与 --due / 农历校验
 /opt/data/scripts/todo/tests/interval_test.py       ← every: / after: 间隔规则 + 审查回归（T16）
+/opt/data/scripts/todo/tests/numbering_test.py      ← 行号 vs #id / 越界零写入 / 退出码 / --html-out（2026-10-14）
+/opt/data/scripts/todo/tests/html_message_test.py   ← HTML 词汇表与转义 / 兜底 body 单源 / m.replace 两层 / 单行化 / 截断（2026-10-14）
 /opt/data/state/todo/history.db                     ← 历史库（运行时自动创建；永久保留）
 （设计阶段的 `test_sched/test_store/test_render/test_cli/test_history/test_matrix_edit` 六个文件
- 未按原计划拆分：实现按「一个测试类一个文件」收敛成上面三个，且一律 `*_test.py` 命名
+ 未按原计划拆分：实现按「一个测试类一个文件」收敛成上面五个，且一律 `*_test.py` 命名
  —— 躲开 disk-cleanup 对 `test_*` 的跟踪，所以 `unittest` 必须带 `-p '*_test.py'`。）
 /opt/data/env/todo/environment
 /opt/data/hooks/todo-reaction/HOOK.yaml
@@ -468,7 +490,7 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 代码位置 `/opt/data/scripts/todo/`：`todo.py`（CLI 全量子命令）、`store.py`（两库/审计/对账）、
 `sched.py`（农历/重复规则/选取）、`render.py`（渲染与胶囊）、`matrix_edit.py`（`m.replace`）、
 `notify.py`（发送/编辑）、`tick.py`（cron 入口）；测试 `tests/`（**当日** 2 个文件 / 15 条：
-`react_test.py` + `add_test.py`；现为 3 个文件 / 54 条，见文末更新记录）。
+`react_test.py` + `add_test.py`；现为 5 个文件 / 74 条，见文末更新记录）。
 
 ### 与本文档的偏差（都是有原因的选择，不是遗漏）
 
@@ -508,7 +530,7 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 
 | 项目 | 证据 |
 | --- | --- |
-| 单测 | `python -m unittest discover -s tests -p '*_test.py'` → `Ran 15 tests ... OK`（**2026-10-12 当时**的 6 条点击语义 + 9 条 `--due` 校验；现为 `Ran 54 tests ... OK`，见文末更新记录）。**必须带 `-p '*_test.py'`**：两个文件都按 `*_test.py` 命名（避开 disk-cleanup 对 `test_*` 的跟踪），默认 `test*.py` 模式会跑 0 条（退出码 5，不会静默通过） |
+| 单测 | `python -m unittest discover -s tests -p '*_test.py'` → `Ran 15 tests ... OK`（**2026-10-12 当时**的 6 条点击语义 + 9 条 `--due` 校验；现为 `Ran 74 tests ... OK`，见文末更新记录）。**必须带 `-p '*_test.py'`**：五个文件都按 `*_test.py` 命名（避开 disk-cleanup 对 `test_*` 的跟踪），默认 `test*.py` 模式会跑 0 条（退出码 5，不会静默通过） |
 | 代码风格 | `ruff check .` + `ruff format --check .` 全过 |
 | 跨库原子（rollback journal） | 实证 0/50 漂移；WAL 33/50 漂移 → 铁律写进 `open_db()` + 单测 + `doctor` |
 | 历史不可篡改 | `sqlite3.set_authorizer` 按 `db_name=="hist"` 拒绝 UPDATE/DELETE，`main` 照常 |
@@ -633,6 +655,49 @@ undo 1                     →  期次 1/2026-10-20/pending  2/2027-10-20/pendin
 `selftest` ✓；真实两库 `doctor --reconcile` 全 ✓ 且 mtime 不变。
 
 ---
+
+## 更新记录（2026-10-14）：序号改「行号」+ 报表/提醒自带 HTML + 退出码统一
+
+**起因（用户报的两个问题）**：① 「列表序号把已删的也算上 / 显示的序号与 `done N` 命中的不是同一条」；
+② Element X（Android）里 `/todo list` 渲染成一坨。
+
+**根因**：① 行首编号以前直接是 `item.id` —— 删掉中间一条后断号，且 `done 3` 命中的是 id=3 而不是「第 3 行」；
+② 网关把回复正文交给 python-markdown（`nl2br`；单段落还会剥 `<p>`），行首 `#3 · 买菜 · work` 被解析成
+`<h1>`（实测 `<h1>3 · 买菜 · work</h1>`）→ Android 上巨大字号、项间不换行。
+
+**改动**：
+
+1. **序号（方案 A）**：`_numbering_rows()`（未删条目按 `(priority, id)` 排序的第 N 行）是序号**唯一基准**，
+   显示（`item_line` / `_row_number`）与解析（`_resolve_handle`）共用；`#id` 保留精确语义
+   （`AUTOINCREMENT`，删除后不复用）；7 个入口统一口径，越界/非法报告 `❌ …` 且 **rc=2、零写入**；
+   `list --json` 增 `index`（纯增字段，已删为 null）；已删条目显示成 `(已删) #id`（行首不再是 `#`）；
+   标题/备注里的换行由 `render.one_line()` 折成单行（否则能伪造出一行）；`isdecimal()` 替 `isdigit()`
+   （`²` 曾裸抛 `ValueError` 且 rc=1）。
+2. **渲染（Element X）**：报表/提醒**自带 HTML**（`render.doc_to_html` / `text_to_html` / `html_line`，
+   词汇表只有 `<p>`/`<strong>`：不用 h1–h6，也不用列表标签）；`m.replace` 的顶层与 `m.new_content`
+   两层都带 `formatted_body`；回执与 `HELP_TEXT` 一律不以 `#` 开头（本轮就是 help 那行 `#7 = …` 让 bug 复发）。
+3. **发送 / 编辑**：报表由插件经 `scripts/todo/send_report.py` **子进程**发出 —— 插件不再在 gateway 进程内
+   import todo 模块（`notify`/`render`/`store`/`matrix_edit` 都是通用名，进程内 import 需 `sys.path` 注入 +
+   裸名 import，会污染 gateway 的 `sys.modules` 且跨会话存活）；发送失败落 warning 后回退网关渲染。
+   纯文本兜底 body **单源**（`render.html_to_text`：发送走 `matrix-send --plain-file`、就地编辑同源）；
+   `sched.py` 的 `lunardate` 改惰性导入（否则缺它的解释器连 `import render` 都失败、报表全退回 markdown）。
+4. **退出码统一**：`❌` ⟺ rc=2（此前「已经是完成状态 / 无变化 / 找不到 / 缺字段 / purge 缺 --yes」等分支
+   返回错误串但 rc=0，脚本与 cron 无法判断失败）。
+5. **性能 / 容量**：`materialize` 改**一条连接 + 一个事务**（此前每条目一条连接：500 条实测 `today` 14.2s，
+   插件侧 CLI 超时只有 20s）；报表 HTML 超 `HTML_OUT_MAX_BYTES=48000` 按整段截断 + 附说明（一次报表是
+   **一条** Matrix 事件，Synapse 默认 `max_event_size=64KiB`，500 条实测 116KB 会被整条拒收）。
+6. **`_strip_tags`** 只剥「看着像标签」的（原 `<[^>]+>` 会把未转义的 `a < b > c` 吃成 `a  c`）。
+
+**验证（实跑）**：`pytest scripts/todo/tests -q` → **74 passed, 5 subtests**（5 个文件 210.9s；新增
+`numbering_test.py` 14 条、`html_message_test.py` 6 条）；`ruff check` + `ruff format --check` 通过
+（`/opt/data/home/.local/bin/ruff`，脚本目录 + `plugins/todo`）；`help` / `--help` / `-h` / 无参数 /
+带审计参数 五路输出 **sha256 完全相同**、2751 字节、**0 行以 `#` 开头**；`selftest` rc=0；
+`doctor --reconcile` 全 ✅ rc=0（item=11 / occurrence=139 / item_event=38，与改动前一致）；
+`tick --dry-run` rc=0 `errors:[]`；个人房实发 11 条测试条目 → 2 页提醒、`formatted_body` 全 `<p>`、
+零 h1，模拟点击后 `m.replace` 两层都带富文本（测试消息与回执已按用户要求 redact）。
+
+**未做（需要用户拍板）**：`store.py`(1650 行) / `todo.py`(1569 行) 越过「单文件 >1000 行」阈值的拆分、
+`build_parser`(153 行) 的按子命令拆分 —— 属批量重构，先出映射方案再动（用户既有规则：批量重构前先确认改法）。
 
 ## 上线配置（2026-10-12，已生效）
 
