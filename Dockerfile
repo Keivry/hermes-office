@@ -1,10 +1,17 @@
-# Base tag: upstream publishes NO bare `v0.21.7` Docker tag (Docker Hub 404s; the last
-# bare tag is v0.21.6) and no October date tag either. v0.21.7 exists only as
-# `rc.15-v0.21.7`, whose multi-arch index digest is identical to `stable`/`latest`
-# (sha256:444b42594e7f467425872fc35e077a227d377f0fe0726bc818706d62175fad8b) -- i.e. it
-# IS the promoted v0.21.7 release image. Pin the tag to keep the build reproducible;
-# swapping it for a bare `v0.21.7` later is a rename if the digest still matches.
-ARG HERMES_AGENT_VERSION=rc.15-v0.21.7
+# Base tag: v0.22.0 publishes a REAL bare Docker tag -- unlike v0.21.7, which existed only
+# as `rc.15-v0.21.7` (a bare v0.21.7 404s on Docker Hub; the last bare tag before this one
+# was v0.21.6). `nousresearch/hermes-agent:v0.22.0` carries the same multi-arch index as the
+# promoted `stable`/`latest`
+# (sha256:c69536a39e885b8943329bda68cdf44492458b96aa74a212239bde9d2aeb406a), so this pin and
+# the promoted release image cannot drift apart. Pin the tag to keep the build reproducible.
+#
+# The tag's own message records the release it was cut from (`claimTag: rc.3-v0.22.0`,
+# commit e06df9c2) and the digest above, which is the cheapest way to re-verify a bump.
+#
+# Base runtime, read from pm/lock.json of the tagged tree: python 3.14.7, node v26.7.0,
+# npm 12.0.2, uv 0.12.3 -- the same toolchain v0.21.7 shipped, so no npm/pip/uv flag in this
+# Dockerfile needed re-checking for the bump.
+ARG HERMES_AGENT_VERSION=v0.22.0
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
@@ -34,7 +41,8 @@ ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH
 # /usr/local/lib first via ld.so.conf.d and refuses to run with "header and
 # source version mismatch". Pin the matching tools zip under /usr/local/bin.
 # DO NOT bump this with the base image. The pin is COUPLED to the libsqlite3 the base
-# builds: v0.21.7 still sets `SQLITE_AUTOCONF_VERSION=3530400` upstream and installs
+# builds: v0.22.0 still sets `SQLITE_AUTOCONF_VERSION=3530400` upstream (re-checked in the
+# tagged Dockerfile on this bump) and installs
 # libsqlite3.so.3.53.4 into /usr/local/lib. A 3.54 CLI resolves that 3.53.4 runtime
 # library first (ld.so.conf.d) and refuses to start -- the exact failure this pin
 # exists to avoid. Latest-tools-zip (3540000) is deliberately NOT taken. Bump only
@@ -130,7 +138,7 @@ RUN curl -fsSL "${SQLITE_ASSET_URL}" -o /tmp/sqlite-tools.zip \
     && rm -rf /tmp/sqlite-tools.zip /tmp/sqlite-tools \
     && sqlite3 --version
 
-# npm 12 (the base's pinned npm -- 12.0.2 in v0.21.6 AND v0.21.7, checked in
+# npm 12 (the base's pinned npm -- 12.0.2 in v0.21.6, v0.21.7 AND v0.22.0, checked in
 # pm/lock.json) removed --unsafe-perm and now hard-errors on
 # unknown CLI flags (EUNKNOWNCONFIG) instead of ignoring them. It was never
 # needed here anyway: npm >= 7 runs lifecycle scripts as root by default, and
@@ -197,9 +205,12 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # package root by the "ClawMem package patches" step further down. The glob
 # here cannot match them.
 #
-# As of v0.21.7 (rc.15-v0.21.7) the roster is 10 patches: the 8 the v0.21.6 sweep left,
-# plus 033 (a bug that sweep did not cover) and 035 (reaction-hook forwarding, a local
-# feature gap). 034 was RETIRED on this bump -- it is gone from patches/.
+# As of v0.22.0 (2026-10-14) the roster is 10 patches, and this bump changed NOTHING: all ten
+# re-applied at fuzz 0 with zero .rej/.orig, and none needed re-anchoring -- the first sweep
+# in this repo's record with neither a retirement nor a re-anchor. (034 was retired earlier,
+# on the v0.21.7 bump.) See the v0.22.0 sweep block below for the per-patch evidence and for
+# 033's now-NAMEABLE retirement trigger (upstream main fixed it on 2026-10-14 but the v0.22.0
+# tag does not carry the fix).
 # `ls patches/*.patch | wc -l` is the truth, not this paragraph: it read 7 through the
 # v2026.9.24 sweep while the disk held 9, and 10 while the disk held 11. Reconcile it
 # against the disk every sweep before trusting any count here.
@@ -419,6 +430,52 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # check_structure.py clean on both re-anchored files (session_lifecycle 13 -> 13 methods
 # + the new top-level helper present; checkpoint_manager 20 -> 20 methods, no class-body
 # nesting), plus 19 + 7 intent assertions on the re-anchored trees.
+#
+# 2026-10-14 sweep (v0.22.0 -- git tag e06df9c2, docker index digest
+# sha256:c69536a39e885b8943329bda68cdf44492458b96aa74a212239bde9d2aeb406a): roster stays at
+# 10. Base moved rc.15-v0.21.7 -> the bare `v0.22.0` tag. The window is narrow (v0.21.7
+# tagger 2026-10-12T05:53:37Z -> v0.22.0 tagger 2026-10-14T03:21:39Z), so drift was checked,
+# not assumed: (a) every patch real-applied to a pristine v0.22.0 tree in lexicographic
+# order, (b) upstream issue/PR state plus merge-commit ancestry vs v0.22.0, (c) each flagged
+# bug still present in the tagged source, (d) the per-file commit enumeration inside the
+# window.
+# NOTHING RETIRED AND NOTHING RE-ANCHORED -- the first sweep in this repo's record where no
+# patch needed touching: every one applied at fuzz 0 with zero .rej/.orig, and the offsets
+# that remain are pure context drift (007 +22, 008 +7/+15/+2, 011 -13, 014 +69, 015 +2,
+# 018 +182/+64, 033 -11; 016, 032 and 035 applied dead-on). Ancestry agrees: #44347, #85207,
+# #85285, #85713, #65354, #78888, #65349 and #83036 are all still OPEN, #77100 is still
+# CLOSED-not-merged, and 018's cited fix commit d4f6e5ac is still "diverged" from the tag.
+# Each premise was re-confirmed against the tagged source rather than inferred from those
+# states: no `file_read` in toolsets.py (008); no active_turn_pid / active_turn_owner_alive
+# anywhere in gateway/ or agent/ (011); title_generator.py still carries exactly one
+# `extra_body={"response_format"` (014); no `node-compile-cache` in
+# checkpoint_manager.DEFAULT_EXCLUDES (015); `_repair_bare_repo_dirs` still 0 hits tree-wide,
+# so 016 keeps re-declaring it (016); no `_is_opencode_custom_name` (018);
+# `_skill_diff_char_budget` absent while the flat `len(out) > 3000` cap still sits at
+# gateway/slash_commands.py:917 (032); plugins/platforms/matrix/adapter.py still never calls
+# `set_reaction_handler` and has no m.room.redaction handler (035).
+# 033's retirement trigger is now NAMEABLE, and it is the interesting result of this sweep.
+# Upstream main fixed the same gap on 2026-10-14T02:51:08Z (committer date) with 357986e58
+# "fix(pm): give generated virtual workspace members a project.version" -- the exact change
+# 033 makes -- widened by 3d8dfc1da "fix(pm): stage a version for version-less buildable
+# plugin members too", which hoists the staging OUT of `if virtual:` so buildable members
+# are covered too (a superset of 033). The v0.22.0 tag carries NEITHER: `gh api
+# compare/v0.22.0...357986e58` == "diverged" and `compare/v0.22.0...main` == "ahead by 119 /
+# behind 0", i.e. both commits are ancestors of main and NOT of the tag (they landed on main
+# after the release branch was cut). The tagged source settles it -- pm/workspace.py:273-274
+# still sets only [project].name in the virtual branch, and line 284's `version = "0.0.0"`
+# belongs to the DIFFERENT manifest-only plugin-deps path further down, which is precisely
+# the template 033's header names.
+# => 033 STAYS on v0.22.0. RETIRE IT on the first base bump whose tag contains 357986e58:
+#    the tell is the `if virtual:` branch staging a project.version (or 033 applying REVERSED).
+# Verified on this bump: 10 x `patch -p1` on a pristine v0.22.0 tree -> rc=0 on every patch,
+# fuzz=0, FAILED=0, REVERSED=0, zero .rej/.orig, all 15 touched files py_compile clean -- and,
+# because that tree was not the one shipped, the built image (hermes-office:test-v0.22.0, from
+# this Dockerfile) was exercised end to end: s6 boot with all five cont-init hooks green,
+# gateway up under s6 with restarts=0, the cron ticker firing a probe job on schedule, 59
+# plugins discovered / 55 enabled with all six of this home's plugins loaded, a real
+# api_server session logging `Memory provider 'clawmem' registered (5 tools)` + `activated`,
+# and every boot-time dependency re-resolution (pm/recovery.py::_baseline_gaps) exiting 0.
 #
 # Previous sweeps:
 # v2026.9.14 / v0.21.3: roster stayed at 8; 7 of 8 re-applied offset-only and
