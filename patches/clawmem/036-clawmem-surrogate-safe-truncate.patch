@@ -1,0 +1,153 @@
+# 036-clawmem-surrogate-safe-truncate.patch
+#
+# Local patch -- NOT an upstream PR. Targets the npm package clawmem@0.43.3
+# (CLAWMEM_VERSION in the Dockerfile), NOT /opt/hermes: ClawMem is a global npm
+# install at /usr/local/lib/node_modules/clawmem, well outside the Hermes source
+# tree, so this patch lives in patches/clawmem/ and is applied against that
+# package root by its own build step. Everything directly in patches/ is still
+# applied against /opt/hermes.
+#
+# Why: truncateForEmbed() capped the remote embed input with a plain
+# `text.slice(0, 6000)` -- a UTF-16 code-unit cut, which can land BETWEEN the
+# two halves of a single code point. The dangling high surrogate is valid
+# JavaScript and `JSON.stringify` escapes it as a bare `\uD83e`, but an unpaired
+# surrogate escape is invalid JSON: llama-server (nlohmann/json) rejected the
+# ENTIRE embedding request with
+#   HTTP 500 [json.exception.parse_error.101] ... invalid string: surrogate
+#   U+D800..U+DBFF must be followed by U+DC00..U+DFFF
+# so that document's seq=0 ('full') fragment failed, and ClawMem's
+# whole-document-or-nothing completion rule marked the doc 'failed' -- left
+# unembedded until someone resets embed_state by hand.
+# Observed live 2026-10-14 (cron job 2212edb10030, daily embed):
+#   doc devops/browser-session-persistence/references/
+#       mcp-tools-missing-cron-session-20261010.md
+#   6041 formatted chars, emoji at UTF-16 offsets 5999/6000, server error at
+#   column 8540 ( = `{"input": "` + the 6000 chars + the lone `\ud83e` + `"` ),
+#   doc left embed_state='failed' with 'primary fragment (seq=0) failed'.
+#
+# What: a new sliceAtCodePointBoundary() in src/limits.ts -- the module
+# splitter.ts already imports from -- which drops the trailing unpaired high
+# surrogate when the cut lands mid-pair (at most one code unit lost, the
+# remaining text unchanged). The three truncation sites that feed a JSON request
+# body now use it:
+#   llm.ts      truncateForEmbed()      -- the remote embed path (the incident)
+#   llm.ts      truncateForLocalEmbed() -- in-process embed, same hazard
+#   splitter.ts maybeSplitLarge()       -- hard-truncate fallback; fragment
+#                                          content goes into the same request
+#
+# Why not just raise CLAWMEM_EMBED_MAX_CHARS: this deployment does raise it
+# (the daily embed cron exports CLAWMEM_EMBED_MAX_CHARS=100000), but raising a
+# cap only moves where the cut lands -- any input whose length happens to land
+# on a pair boundary still 500s the request, and fragment content stays capped
+# by MAX_FRAGMENT_CHARS=2000 regardless. Fix the cut, not the number.
+#
+# Deliberately NOT covered: the LLM-prompt caps in observer.ts (167, 196, 378,
+# 1108) and hooks.ts (576, 835) carry the same hazard but feed
+# /v1/chat/completions, not the embedding endpoint; none has fired in this
+# deployment. Extend them with the same helper if one ever does.
+#
+# Evidence (2026-10-14, isolated A/B against the live zembed-1 server, same doc,
+# separate DBs, cap pinned to the stock 6000):
+#   stock tree    -> HTTP 500 at column 8540, frag 1/21 (full) -> null result,
+#                    "Embedded 2 documents (21 fragments, 1 failed)",
+#                    doc embed_state='failed'
+#   patched tree  -> frag 1/21 (full) 1426ms [6041 chars],
+#                    "Embedded 2 documents (22 fragments, 0 failed)",
+#                    doc embed_state='synced'
+# plus a direct request-body check: `{"input":"tail\ud83e",...}` -> 500,
+# `{"input":"tail\ud83e\uddf9",...}` -> 200.
+#
+# Retirement: on a clawmem version bump, re-apply this against the new package.
+# A bump that fixes the bug upstream makes `patch` fail (context mismatch) and
+# therefore aborts the build -- that is the intended signal to delete this file
+# and its Dockerfile step together.
+#
+--- a/src/limits.ts
++++ b/src/limits.ts
+@@ -24,3 +24,31 @@
+ 
+ // Paths
+ export const MAX_PATH_LENGTH = 1_000;
++
++// =============================================================================
++// Text slicing
++// =============================================================================
++
++/**
++ * Slice `text` to at most `maxChars` UTF-16 code units, never splitting a
++ * surrogate pair.
++ *
++ * A plain `text.slice(0, maxChars)` can cut between the two halves of a single
++ * code point (anything outside the BMP: emoji, rare CJK). The cut is still
++ * valid JavaScript, and `JSON.stringify` escapes the dangling half as a bare
++ * `\ud83e` -- but an unpaired surrogate escape is invalid JSON for strict
++ * parsers. llama-server (nlohmann/json) rejects the ENTIRE request with HTTP
++ * 500, so the document's seq=0 fragment fails and the doc is marked 'failed'
++ * (2026-10-14 incident: the 6000-char remote embed cap cut an emoji in half in
++ * doc 1891, failing one embed request and the whole document).
++ *
++ * Costs at most one code unit out of maxChars. Use it for any string that will
++ * be serialised into a JSON request body.
++ */
++export function sliceAtCodePointBoundary(text: string, maxChars: number): string {
++  if (text.length <= maxChars) return text;
++  const cut = text.slice(0, maxChars);
++  const last = cut.charCodeAt(cut.length - 1);
++  // 0xD800-0xDBFF = high surrogate, i.e. the head of a pair whose tail the cut dropped.
++  return (last >= 0xd800 && last <= 0xdbff) ? cut.slice(0, -1) : cut;
++}
+--- a/src/llm.ts
++++ b/src/llm.ts
+@@ -27,6 +27,7 @@
+ import { existsSync, mkdirSync } from "fs";
+ import { createHash } from "crypto";
+ import { timeoutSignal, type MonoDeadline, epochNow, epochMs, monoNow, deadlineAfter, duration, earliest } from "./clock.ts";
++import { sliceAtCodePointBoundary } from "./limits.ts";
+ 
+ // =============================================================================
+ // Embedding Formatting Functions
+@@ -1062,7 +1063,7 @@
+   /** Truncate text to maxRemoteEmbedChars for local in-process embedding (prevents context overflow crash) */
+   private truncateForLocalEmbed(text: string): string {
+     if (text.length <= this.maxRemoteEmbedChars) return text;
+-    return text.slice(0, this.maxRemoteEmbedChars);
++    return sliceAtCodePointBoundary(text, this.maxRemoteEmbedChars);
+   }
+ 
+   // ---------- Remote failure classification ----------
+@@ -1317,8 +1318,12 @@
+   private truncateForEmbed(text: string): string {
+     // Cloud providers handle their own context window limits
+     if (this.isCloudEmbedding()) return text;
+-    return text.length > this.maxRemoteEmbedChars
+-      ? text.slice(0, this.maxRemoteEmbedChars) : text;
++    // Slice on a code-point boundary. The old plain slice() could cut between the
++    // halves of one code point; JSON.stringify then emitted a lone \ud83e
++    // escape, which strict JSON parsers reject outright -- llama-server answered
++    // the whole request with HTTP 500 and the document was marked 'failed'
++    // (2026-10-14, doc 1891).
++    return sliceAtCodePointBoundary(text, this.maxRemoteEmbedChars);
+   }
+ 
+   /** Parse Retry-After header (seconds or HTTP-date) into milliseconds to wait */
+--- a/src/splitter.ts
++++ b/src/splitter.ts
+@@ -22,7 +22,7 @@
+ // Config
+ // =============================================================================
+ 
+-import { MAX_FRAGMENTS_PER_DOC, MAX_SPLITTER_INPUT_CHARS } from "./limits.ts";
++import { MAX_FRAGMENTS_PER_DOC, MAX_SPLITTER_INPUT_CHARS, sliceAtCodePointBoundary } from "./limits.ts";
+ 
+ const MIN_FRAGMENT_CHARS = 50;
+ const MAX_FRAGMENT_CHARS = 2000;
+@@ -320,6 +320,7 @@
+     return content.slice(0, lineBreak);
+   }
+ 
+-  // Hard truncate
+-  return content.slice(0, MAX_FRAGMENT_CHARS);
++  // Hard truncate -- code-point safe: a lone surrogate left by the cut would
++  // make the fragment's JSON request body invalid for strict parsers.
++  return sliceAtCodePointBoundary(content, MAX_FRAGMENT_CHARS);
+ }

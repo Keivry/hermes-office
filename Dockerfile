@@ -192,6 +192,11 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # patch aborts the build so a half-patched image never ships. Remove a patch
 # file once the fix is merged upstream and HERMES_AGENT_VERSION is bumped.
 #
+# ClawMem is NOT in this roster: it is a global npm install outside /opt/hermes,
+# so its patches live in patches/clawmem/ and are applied against the installed
+# package root by the "ClawMem package patches" step further down. The glob
+# here cannot match them.
+#
 # As of v0.21.7 (rc.15-v0.21.7) the roster is 10 patches: the 8 the v0.21.6 sweep left,
 # plus 033 (a bug that sweep did not cover) and 035 (reaction-hook forwarding, a local
 # feature gap). 034 was RETIRED on this bump -- it is gone from patches/.
@@ -556,6 +561,29 @@ RUN set -eux; \
         done; \
     fi; \
     rm -rf /tmp/hermes-patches
+
+# ── ClawMem package patches ──────────────────────────────────────────────
+# ClawMem is a global npm install (/usr/local/lib/node_modules/clawmem), not
+# part of the Hermes source tree, so the roster above cannot reach it:
+# patches/clawmem/*.patch are applied here, against the installed package root,
+# in lexicographic order. Same contract as above -- a patch that does not apply
+# exits nonzero and aborts the build (which is also the retirement signal: a
+# clawmem bump that fixes the bug upstream makes the anchored patch fail), and
+# `ls patches/clawmem/*.patch | wc -l` is the truth, not any prose count.
+# Applied after the CLAWMEM_VERSION install above and before any runtime use;
+# the glob above matches files only, so it never picks these up. Retire the
+# patch together with the ENV/script workarounds it supersedes.
+COPY patches/clawmem/ /tmp/clawmem-patches/
+RUN set -eux; \
+    CLAWMEM_PKG=/usr/local/lib/node_modules/clawmem; \
+    test -f "$CLAWMEM_PKG/src/llm.ts"; \
+    if ls /tmp/clawmem-patches/*.patch >/dev/null 2>&1; then \
+        for p in /tmp/clawmem-patches/*.patch; do \
+            echo "==> Applying $(basename "$p") (clawmem pkg)"; \
+            (cd "$CLAWMEM_PKG" && patch -p1 --no-backup-if-mismatch < "$p"); \
+        done; \
+    fi; \
+    rm -rf /tmp/clawmem-patches
 
 COPY skills/ /opt/hermes/skills/
 # s6-overlay cont-init.d hook: runs after base stage2 setup (01-hermes-setup),
