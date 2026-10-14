@@ -477,9 +477,10 @@ TODO_HISTORY_DEFAULT_LIMIT=30
 /opt/data/scripts/todo/tests/interval_test.py       ← every: / after: 间隔规则 + 审查回归（T16）
 /opt/data/scripts/todo/tests/numbering_test.py      ← 行号 vs #id / 越界零写入 / 退出码 / --html-out（2026-10-14）
 /opt/data/scripts/todo/tests/html_message_test.py   ← HTML 词汇表与转义 / 兜底 body 单源 / m.replace 两层 / 单行化 / 截断（2026-10-14）
+/opt/data/scripts/todo/tests/store_package_test.py  ← store 包纯度（禁 sched/render/notify/lunardate）+ 门面覆盖现状调用面（2026-10-14，从 interval_test.py 拆出）
 /opt/data/state/todo/history.db                     ← 历史库（运行时自动创建；永久保留）
 （设计阶段的 `test_sched/test_store/test_render/test_cli/test_history/test_matrix_edit` 六个文件
- 未按原计划拆分：实现按「一个测试类一个文件」收敛成上面五个，且一律 `*_test.py` 命名
+ 未按原计划拆分：实现按「一个测试类一个文件」收敛成上面六个，且一律 `*_test.py` 命名
  —— 躲开 disk-cleanup 对 `test_*` 的跟踪，所以 `unittest` 必须带 `-p '*_test.py'`。）
 /opt/data/env/todo/environment
 /opt/data/hooks/todo-reaction/HOOK.yaml
@@ -505,10 +506,11 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 
 状态：**核心已实现并验证**（T0–T13b 完成；T14 端到端 PoC 与 T15 补丁部署等用户输入）。
 
-代码位置 `/opt/data/scripts/todo/`：`todo.py`（CLI 全量子命令）、`store.py`（两库/审计/对账）、
+代码位置 `/opt/data/scripts/todo/`：`todo.py`（CLI 全量子命令；2026-10-14 起为薄入口 + `todo_*.py` 家族）、
+`store/`（包：门面 `__init__.py` + 8 模块，两库/审计/对账）、
 `sched.py`（农历/重复规则/选取）、`render.py`（渲染与胶囊）、`matrix_edit.py`（`m.replace`）、
 `notify.py`（发送/编辑）、`tick.py`（cron 入口）；测试 `tests/`（**当日** 2 个文件 / 15 条：
-`react_test.py` + `add_test.py`；现为 5 个文件 / 74 条，见文末更新记录）。
+`react_test.py` + `add_test.py`；现为 6 个文件 / 76 条，见文末更新记录）。
 
 ### 与本文档的偏差（都是有原因的选择，不是遗漏）
 
@@ -757,6 +759,28 @@ undo 1                     →  期次 1/2026-10-20/pending  2/2027-10-20/pendin
 
 **未做（沿用）**：`build_parser` 仍是一个 153 行的函数——按子命令再拆会引入参数定义与 handler 的
 位置耦合，收益不抵风险，留作既有项。
+
+## 更新记录（2026-10-14 三轮）：红线收口 —— 测试文件拆出 + 超长函数登记
+
+**起因**：二轮审查（4 路并行）报回两类落差，用户拍板一并处理。
+
+**① `tests/interval_test.py` 1019 行越过「单文件 ≤1000 行」红线**（二轮新增的 3 条守护把它顶了出去）。
+处理：`StorePackagePurityTest`（569–614，46 行）整体搬到新文件 `tests/store_package_test.py`——
+该类只依赖源码文本（`ast`）与门面属性，与 `every:`/`after:` 的端到端上下文无耦合。搬完
+`interval_test.py` **1019 → 971 行**，红线恢复；两个文件合计用例数 **40 不变**（38 + 2）。
+
+**② 超长函数登记（口径与 `build_parser` 一致：留作既有项，不硬拆）**。全仓实测 >100 行的函数恰好三个：
+
+| 函数 | 行数 | 不拆的理由 |
+|:--|:--|:--|
+| `todo_cli.build_parser()` | 153 | 按子命令再拆会把「参数定义」与「handler 绑定」拆到两处，位置耦合，收益不抵风险（二轮已记录） |
+| `store/health.py:doctor()` | 173 | 线性体检清单：一份共享诊断状态（`lines` / `problems`）+ 顺序判定（`check()` 闭包）。拆成多函数要把该状态显式传递或改写成类 —— 属结构性改写而非搬迁，且 `doctor` 的 ❌ 文案是 CLI 稳定输出面，改动即漂移风险 |
+| `store/anchor.py:undo_complete()` | 116 | 单事务内「读 → 判分 → 锚点回退 + 清残留期次 → 回滚多表 → 落事件」的线性流程。分段函数会把事务边界与状态依赖散开，而这里**正是拆分最容易出事故的形态**（期次删除/改 skipped 的判定链） |
+
+**证据（实跑）**：搬移用 AST 切片，判据与二轮同一套 —— 原文件其余顶层符号 `ast.unparse` 逐字不变
+（`only_old=['StorePackagePurityTest']`、无新增、无共同差异），搬走类新旧逐字相同；`pytest
+scripts/todo/tests -q` → **76 passed, 5 subtests**（exit 0），用例集按文件名归一后与改前**完全一致**
+（只差那 2 条换了文件）；`ruff check` / `ruff format --check` 对 27 个文件全过。
 
 ## 上线配置（2026-10-12，已生效）
 
