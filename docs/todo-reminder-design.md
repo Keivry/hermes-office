@@ -328,7 +328,7 @@ selftest
 ```
 
 **编号（2026-10-14 起）**：纯数字 = **`/todo list` 的行号**（未删条目按 `(priority, id)` 排序的第 N 行，
-实现见 `todo.py:_numbering_rows()`；显示与解析共用这一份，过滤视图里显示的也是**全局**行号）；`#N` =
+实现见 `todo_common.py:_numbering_rows()`；显示与解析共用这一份，过滤视图里显示的也是**全局**行号）；`#N` =
 条目 id（`AUTOINCREMENT`，删除后不复用，永远精确）。7 个入口（`edit/show/history/done/undo/rm/purge`）
 同口径：越界/非法报 `❌ …` 且 **rc=2、零写入**；已删条目**不占行号**，在 `list --all` 里显示成 `(已删) #id`。
 
@@ -723,7 +723,7 @@ undo 1                     →  期次 1/2026-10-20/pending  2/2027-10-20/pendin
 用户拍板：**方案 A（按职责细切）+ 两期一起做**。
 
 **改法（纯搬迁）**：`store.py` → `store/` **包**（门面 `__init__.py` + 8 模块，最大 344 行）；
-`todo.py` → 薄入口（96 行）+ 8 个 `todo_*.py`（最大 369 行）。拆分依据先落成映射方案
+`todo.py` → 薄入口（100 行）+ 9 个 `todo_*.py`（最大 369 行）。拆分依据先落成映射方案
 （`cache/scratch/todo_split/PLAN.md`：逐符号归属表 + 风险对策 + 验收清单），映射用 AST 做覆盖自检
 （`store` 76/76、`todo` 71/71，无遗漏、无重复）。
 
@@ -743,7 +743,7 @@ undo 1                     →  期次 1/2026-10-20/pending  2/2027-10-20/pendin
    门面覆盖现状调用面）；期 1 单跑亦绿；
 4. `help` 五路 sha256 仍**完全相同**、2751 字节、0 行首 `#`；`selftest` / `doctor --reconcile` /
    `tick --dry-run` rc=0（真实库 item=11 / occurrence=139 / item_event=38 未变）；`store.__file__` 指向
-   `store/__init__.py`；19 个新模块**逐个单独 import** 成功（查循环导入）。
+   `store/__init__.py`；18 个新模块（9 个 `store/*` + 9 个 `todo_*.py`，连同入口 `todo.py` 共 19 个文件）**逐个单独 import** 成功（查循环导入）。
 
 **踩到的两个坑（生成器 bug，都当场修掉）**：① 按 `node.lineno` 切片会**丢掉装饰器**
 （`@contextlib.contextmanager` → `transaction` 变成普通生成器函数，`with transaction(con)` 直接
