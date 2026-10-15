@@ -1,0 +1,177 @@
+# 037-deepseek-responses-reasoning-text-echo.patch
+#
+# Vendored upstream PR #133799 (OPEN, DRAFT, author linfordWu, branch
+# fix/deepseek-responses-reasoning-text) rebased onto v0.22.2, PLUS a fix to the PR's own
+# gate that makes it a no-op on a relay host -- without that fix this patch changes nothing
+# for this deployment. Upstream issue #133792 (OPEN, provider/deepseek, P2).
+#
+# Why: on the codex_responses wire Hermes persists and replays an encrypted reasoning blob
+#   plus summary but never the thinking TEXT DeepSeek's /responses endpoint requires back:
+#     * _capture_encrypted_item() stores only {type, encrypted_content, id, summary};
+#       DeepSeek puts its thinking text in content[].reasoning_text (and summary: []), so the
+#       text is discarded at capture.
+#     * _preflight_encrypted() forwards only type/encrypted_content/summary, so even a
+#       captured content[] is stripped on the way out.
+#   Result: a mid-session continuation after enough tool-call turns is rejected with
+#     HTTP 400: The `reasoning_text` in the thinking mode must be passed back to the API.
+#   The error classifier files it as FailoverReason.format_error (retryable=False), so the
+#   existing recovery ladder never fires and the turn dies.
+#   The chat_completions wire already handles this requirement
+#   (agent/message_sanitization.py _REASONING_ECHO_RULES pads a missing reasoning_content
+#   with " "); the codex_responses path had no equivalent.
+#
+# After: _replay_reasoning_items/_chat_messages_to_responses_input take an opt-in
+#   require_reasoning_text_echo flag; when set, each replayed reasoning item gets
+#   content:[{type:"reasoning_text",text:" "}] and _preflight_encrypted preserves it. Callers
+#   derive the flag from needs_reasoning_echo(provider, model, base_url).
+#
+# Deviation from the PR (MANDATORY -- the PR alone is inert here): the PR gates both call
+#   sites on needs_reasoning_echo(None, None, base_url). That helper matches the must-echo
+#   table on host OR model; DeepSeek's host entry is api.deepseek.com only and this
+#   deployment reaches DeepSeek through the OpenCode Go relay (https://opencode.ai/zen/go/v1),
+#   so with provider/model dropped the family never matches and the pad never engages.
+#   Measured on the v0.22.2 tree: needs_reasoning_echo(None, None, relay_host) -> False,
+#   needs_reasoning_echo("custom", "deepseek-v4.1-flash", relay_host) -> True.
+#   Both call sites therefore pass provider + model (agent/codex_responses_adapter.py uses
+#   requested_provider or provider, plus the effective wire model; agent/transports/codex.py
+#   uses kwargs provider/model).
+#
+# Runtime files only: agent/codex_responses_adapter.py, agent/transports/codex.py
+#
+# Verified on a pristine v0.22.2 tree (d923a5eb):
+#   (a) patch -p1 --dry-run -> rc=0, hunks land at v0.22.2 line numbers (offset +59/+60,
+#       +43), no fuzz, no .rej/.orig; reverses cleanly (rc=0).
+#   (b) py_compile clean; check_structure.py shows the +2 params and +1 helper region with
+#       no class-body indentation change.
+#   (c) Behaviour RED->GREEN through the REAL transport call path
+#       (ResponsesApiTransport.convert_messages with provider=custom:opencode-codex,
+#       model=deepseek-v4.1-flash, base_url=relay, one persisted reasoning blob):
+#         pristine v0.22.2  -> replayed reasoning item has NO content  (RED)
+#         patched           -> content=[{type:reasoning_text,text:" "}] (GREEN)
+#       Control: with both gates reverted to the PR's (None, None, base_url) form the pad
+#       disappears again -- proving the gate fix, not just the PR hunks, is what makes the
+#       pad engage on this deployment.
+#   (d) End-to-end against the real failing history (state.db session 20261015_203017_899c6016,
+#       cutoff id 230890, 39 items / 8 reasoning items, deterministic triple-run):
+#         BEFORE this patch: HTTP 400 "The `reasoning_text` in the thinking mode must be
+#           passed back to the API." (request ids 056e5a41/3a22d83a/98ab83fe/60000a10)
+#         WITH    this patch: HTTP 200 completed.
+#       NOTE (recorded 2026-10-16): the relay stopped enforcing the requirement mid-morning --
+#       the same pad-OFF history that 400'd deterministically now returns 200 (4/4 trials,
+#       reused and fresh x-opencode-session, effort high/low/none). The requirement is
+#       therefore conditional and server-side; this patch stays correct for the states where
+#       it IS enforced, and is the reason the enforcement, when it returns, no longer kills
+#       the turn.
+#
+# Retire when: upstream #133792 is closed AND the corresponding fix is an ancestor of the
+#   pinned base tag (re-check with the ancestry rule, not the PR's state -- #133799 is still
+#   OPEN/DRAFT as of 2026-10-16). Re-anchor anchors: _replay_reasoning_items signature,
+#   _chat_messages_to_responses_input signature, _preflight_encrypted return dict,
+#   ResponsesApiTransport.convert_messages, _native_responses_replay_items.
+#
+diff --git a/agent/codex_responses_adapter.py b/agent/codex_responses_adapter.py
+--- a/agent/codex_responses_adapter.py
++++ b/agent/codex_responses_adapter.py
+@@ -467,6 +467,7 @@ def _assistant_message_item(
+ def _replay_reasoning_items(
+     msg: dict[str, Any], *, seen_item_ids: set, current_issuer_kind: Optional[str],
+     current_issuer_model: Optional[str] = None, native_compaction_eligible: bool,
++    require_reasoning_text_echo: bool = False,
+ ) -> list[dict[str, Any]]:
+     """Replay persisted encrypted reasoning/compaction items for one assistant turn. Skips duplicate
+     ids, ``compaction`` checkpoints unless THIS request carries ``context_management`` (else a persisted
+@@ -498,7 +499,10 @@ def _replay_reasoning_items(
+                 )
+                 _CROSS_ISSUER_WARN_EMITTED = True
+             continue
+-        replayed.append({k: v for k, v in ri.items() if k not in ("id", "_issuer_kind", "_issuer_model")})
++        replayed_item = {k: v for k, v in ri.items() if k not in ("id", "_issuer_kind", "_issuer_model")}
++        if require_reasoning_text_echo and replayed_item.get("type") == "reasoning":
++            replayed_item.setdefault("content", [{"type": "reasoning_text", "text": " "}])
++        replayed.append(replayed_item)
+         if item_id:
+             seen_item_ids.add(item_id)
+     return replayed
+@@ -612,6 +616,7 @@ def _chat_messages_to_responses_input(
+     messages: list[dict[str, Any]], *, is_xai_responses: bool = False, is_github_responses: bool = False,
+     replay_encrypted_reasoning: bool = True, current_issuer_kind: Optional[str] = None,
+     current_issuer_model: Optional[str] = None, native_compaction_eligible: bool = False,
++    require_reasoning_text_echo: bool = False,
+ ) -> list[dict[str, Any]]:
+     """Convert internal chat-style messages to Responses input items.
+ 
+@@ -691,6 +696,7 @@ def _chat_messages_to_responses_input(
+         reasoning_items = [] if not replay_encrypted_reasoning else _replay_reasoning_items(
+             msg, seen_item_ids=seen_item_ids, current_issuer_kind=current_issuer_kind,
+             current_issuer_model=current_issuer_model, native_compaction_eligible=native_compaction_eligible,
++            require_reasoning_text_echo=require_reasoning_text_echo,
+         )
+         emit(reasoning_items, msg)
+         message_items = _replay_message_items(
+@@ -772,6 +778,7 @@ def _native_responses_replay_items(
+         return None
+     # The wire model may be rewritten per request (fast mode); provenance must match what the transport stamps.
+     effective_model = effective_request_overrides(agent).get("model", getattr(agent, "model", None))
++    from agent.message_sanitization import needs_reasoning_echo
+     try:
+         items = _chat_messages_to_responses_input(
+             messages, is_xai_responses=route["is_xai_responses"], is_github_responses=route["is_github_responses"],
+@@ -779,6 +786,11 @@ def _native_responses_replay_items(
+             current_issuer_kind=_classify_responses_issuer(base_url=getattr(agent, "base_url", None), **route),
+             current_issuer_model=_wire_model_identity(effective_model),
+             native_compaction_eligible=True,
++            # hermes-office: provider + effective model, not base_url alone (see convert_messages).
++            require_reasoning_text_echo=needs_reasoning_echo(
++                getattr(agent, "requested_provider", None) or getattr(agent, "provider", None),
++                effective_model, getattr(agent, "base_url", None),
++            ),
+         )
+     except Exception:
+         logger.debug(
+@@ -872,10 +884,21 @@ def _preflight_encrypted(item: dict[str, Any], idx: int, ctx: _PreflightCtx) ->
+             return None
+         ctx.seen_ids.add(item_id)
+     summary = _as_list(item.get("summary"))
+-    return {
++    normalized = {
+         "type": "reasoning", "encrypted_content": encrypted,
+         "summary": _neutralize_harmony_structure(summary) if ctx.sanitize_harmony_tokens else summary,
+     }
++    content = item.get("content")
++    if isinstance(content, list):
++        reasoning_text = [
++            {"type": "reasoning_text", "text": ctx.sanitize_text(part["text"])}
++            for part in content
++            if isinstance(part, dict) and part.get("type") == "reasoning_text"
++            and isinstance(part.get("text"), str) and part["text"]
++        ]
++        if reasoning_text:
++            normalized["content"] = reasoning_text
++    return normalized
+ 
+ 
+ def _preflight_message(item: dict[str, Any], idx: int, ctx: _PreflightCtx) -> dict[str, Any]:
+diff --git a/agent/transports/codex.py b/agent/transports/codex.py
+--- a/agent/transports/codex.py
++++ b/agent/transports/codex.py
+@@ -684,6 +684,7 @@ class ResponsesApiTransport(ProviderTransport):
+     def convert_messages(self, messages: list[dict[str, Any]], **kwargs) -> Any:
+         """Convert OpenAI chat messages to Responses API input items."""
+         from agent.codex_responses_adapter import _chat_messages_to_responses_input, _wire_model_identity
++        from agent.message_sanitization import needs_reasoning_echo
+ 
+         self._last_issuer_model = _wire_model_identity(kwargs.get("model"))
+         return _chat_messages_to_responses_input(
+@@ -693,6 +694,12 @@ class ResponsesApiTransport(ProviderTransport):
+             current_issuer_kind=self._resolve_issuer_kind(kwargs),
+             current_issuer_model=self._last_issuer_model,
+             native_compaction_eligible=_native_compaction_active(kwargs.get("context_management")),
++            # hermes-office: pass provider + model, not just base_url. The must-echo table keys
++            # DeepSeek on the model name (host rule alone is api.deepseek.com), so a relay host
++            # (opencode.ai) with model=None never matches and the pad never engages.
++            require_reasoning_text_echo=needs_reasoning_echo(
++                kwargs.get("provider"), kwargs.get("model"), kwargs.get("base_url"),
++            ),
+         )
+ 
+     def convert_tools(self, tools: Optional[list[dict[str, Any]]]) -> Any:
