@@ -1,23 +1,26 @@
-# Base tag: v0.22.1 publishes a REAL bare Docker tag -- unlike v0.21.7, which existed only
-# as `rc.15-v0.21.7` (a bare v0.21.7 404s on Docker Hub; the last bare tag before v0.22.0
-# was v0.21.6). `nousresearch/hermes-agent:v0.22.1` carries the same multi-arch index as the
-# promoted `stable`/`latest`
-# (sha256:861c9756ed6c558530c73d5c27860343b00c0d5efd6997a1d8ec6416c8a2b485), so this pin and
-# the promoted release image cannot drift apart. Pin the tag to keep the build reproducible.
+# Base tag: v0.22.2 is the release v0.22.1 was meant to be -- 0.22.1 was built from the wrong
+# commit and shipped unreleased gateway work. Both publish a REAL bare Docker tag.
+# `nousresearch/hermes-agent:v0.22.2` multi-arch index digest
+# sha256:36099926da316742423544e055d4734777105ffe6341873af5459b957d0c2919 (read back from
+# the registry), so this pin and the promoted release image cannot drift apart.
 #
-# The tag's own message records the release it was cut from (`claimTag: rc.5-v0.22.1`,
-# commit 297552a9, dockerManifestDigest sha256:861c9756...) and the digest above, which is
-# the cheapest way to re-verify a bump.
+# The tag is annotated (object 7b77e29e) and its own message records the release it was cut
+# from: claimTag rc.2-v0.22.2, commit d923a5eb, dockerManifestDigest sha256:36099926... --
+# the same digest as the index above, which is the cheapest way to re-verify a bump.
 #
 # Base runtime, read from pm/lock.json of the tagged tree: python 3.14.7, node v26.7.0,
-# npm 12.0.2, uv 0.12.3 -- the same toolchain v0.22.0 shipped, so no npm/pip/uv flag in this
-# Dockerfile needed re-checking for the bump. v0.22.1's base Dockerfile is NOT byte-identical
-# to v0.22.0's: it adds `--cache /opt/hermes/uv-cache` to its own `pm.build_env` stage (543
-# lines vs 537), a base-internal build-stage change that does not touch this image. The base
-# runtime is unchanged -- pm/lock.json is byte-identical between the two tags (python 3.14.7,
-# node 26.7.0, npm 12.0.2, uv 0.12.3) -- and SQLITE_AUTOCONF_VERSION is still 3530400 in both,
-# so the sqlite CLI pin below is untouched.
-ARG HERMES_AGENT_VERSION=v0.22.1
+# npm 12.0.2, uv 0.12.3 -- identical to v0.22.1, so no npm/pip/uv flag in this Dockerfile
+# needed re-checking for the bump. The base Dockerfile is byte-identical between v0.22.1 and
+# v0.22.2 (543 lines, zero diff), and SQLITE_AUTOCONF_VERSION is still 3530400 in both, so the
+# sqlite CLI pin below is untouched. The 300-file v0.22.1->v0.22.2 delta is all under the
+# base image's own paths (gateway boot epoch, local-model streaming, profiles, Windows
+# packaging, catalog) plus release plumbing.
+#
+# Known upstream issue carried by this base: "Sessions that ran under the 0.22.1 gateway
+# can't be deleted in 0.22.2" (release notes). This deployment ran v0.22.1 from 2026-10-14, so
+# pre-existing sessions in state.db may fail to delete until upstream addresses it.
+
+ARG HERMES_AGENT_VERSION=v0.22.2
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
@@ -233,6 +236,8 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # end of this header. Note the number is the NEXT ONE IN THIS ROSTER, independent of
 # patches/clawmem/036: the two rosters are applied by different globs against different trees and
 # have never shared a sequence.
+# 037 was ADDED on 2026-10-16 WITH the v0.22.2 base bump (roster 10 -> 11) -- see its own block
+# near the end of this header.
 # `ls patches/*.patch | wc -l` is the truth, not this paragraph: it read 7 through the
 # v2026.9.24 sweep while the disk held 9, and 10 while the disk held 11. Reconcile it
 # against the disk every sweep before trusting any count here.
@@ -570,6 +575,39 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   command-shaped bodies (real slash commands plus resolved and unresolved bang text) keep their
 #   previous type either way, and the 3 existing Matrix suites stay at 140 passed. The throwaway
 #   test module is NOT shipped -- this roster carries runtime files only.
+#
+# 2026-10-16 sweep (v0.22.2): roster 10 -> 11. This tag is a release cut from release/0.22.1
+#   with the published v0.22.1 as its parent (d923a5eb) -- it is what 0.22.1 was meant to ship;
+#   0.22.1 was built from the wrong commit. Drift was checked, not assumed: every patch
+#   real-applied to a pristine v0.22.2 checkout in lexicographic order -> rc=0 on all 11, fuzz=0,
+#   zero .rej/.orig, all 16 touched files py_compile clean, ruff check clean before AND after on
+#   the two files 037 touches, check_structure.py STRUCTURE OK, and 11/11 marker greps present.
+#   ZERO RETIRE (no patch's fix is in v0.22.2) and ZERO RE-ANCHOR (offset-only drift; the largest
+#   was 018's +187 in chat_completion_helpers.py). 016 again reports a standalone FAIL purely
+#   because it depends on 015 -- it applies clean in lexicographic order.
+#
+#   Upstream-coverage check per patch on this bump: the referenced upstream items are
+#   #46310/#57315/#85207/#105841/#82816/#85713 (CLOSED-mixed: 011's #85207 is still OPEN and its
+#   fix is NOT in the tag; 014 stays because #85713 is still OPEN per its own header condition),
+#   #78888/#65349/#83036 (all still OPEN -> 015/016 stay), 035/036 (local gaps, upstream main still
+#   carries the unfixed shape: adapter.py:2166 still stamps MessageType.COMMAND from a bare leading
+#   "/", and there is still no set_reaction_handler call). No ancestry flip on any of them.
+#
+#   037 ADDED (roster 10 -> 11): deepseek-responses-reasoning-text-echo, a vendored upstream
+#   PR #133799 (still OPEN/DRAFT; issue #133792 still OPEN) rebased onto v0.22.2 PLUS a fix to the
+#   PR's own gate. The PR gates both call sites on needs_reasoning_echo(None, None, base_url),
+#   which matches the must-echo table on host OR model; DeepSeek's host entry is api.deepseek.com
+#   only and this deployment reaches DeepSeek through the OpenCode Go relay (opencode.ai), so with
+#   provider/model dropped the family never matches and the pad never engages. Measured on the
+#   v0.22.2 tree: (None, None, relay) -> False; ("custom", "deepseek-v4.1-flash", relay) -> True.
+#   Both call sites now pass provider + model. Without that deviation this patch is inert here.
+#   Full rationale, the RED->GREEN evidence and the retirement condition are in the patch header.
+#
+# VERIFIED on this bump: 11 x `patch -p1` in lexicographic order on a fresh pristine v0.22.2 tree
+#   -> rc=0 on every patch, fuzz=0, zero .rej/.orig, all 16 touched files py_compile clean,
+#   11/11 marker greps PASS, ruff check clean on 037's two files before and after, and
+#   check_structure.py STRUCTURE OK on both. 037 additionally carries a behaviour-level RED->GREEN
+#   through the real transport call path plus an end-to-end replay of the real failing history.
 #
 # Previous sweeps:
 # v0.22.0 / e06df9c2 (2026-10-14): roster stayed at 10, zero retire / zero re-anchor. See the
