@@ -1,17 +1,23 @@
-# Base tag: v0.22.0 publishes a REAL bare Docker tag -- unlike v0.21.7, which existed only
-# as `rc.15-v0.21.7` (a bare v0.21.7 404s on Docker Hub; the last bare tag before this one
-# was v0.21.6). `nousresearch/hermes-agent:v0.22.0` carries the same multi-arch index as the
+# Base tag: v0.22.1 publishes a REAL bare Docker tag -- unlike v0.21.7, which existed only
+# as `rc.15-v0.21.7` (a bare v0.21.7 404s on Docker Hub; the last bare tag before v0.22.0
+# was v0.21.6). `nousresearch/hermes-agent:v0.22.1` carries the same multi-arch index as the
 # promoted `stable`/`latest`
-# (sha256:c69536a39e885b8943329bda68cdf44492458b96aa74a212239bde9d2aeb406a), so this pin and
+# (sha256:861c9756ed6c558530c73d5c27860343b00c0d5efd6997a1d8ec6416c8a2b485), so this pin and
 # the promoted release image cannot drift apart. Pin the tag to keep the build reproducible.
 #
-# The tag's own message records the release it was cut from (`claimTag: rc.3-v0.22.0`,
-# commit e06df9c2) and the digest above, which is the cheapest way to re-verify a bump.
+# The tag's own message records the release it was cut from (`claimTag: rc.5-v0.22.1`,
+# commit 297552a9, dockerManifestDigest sha256:861c9756...) and the digest above, which is
+# the cheapest way to re-verify a bump.
 #
 # Base runtime, read from pm/lock.json of the tagged tree: python 3.14.7, node v26.7.0,
-# npm 12.0.2, uv 0.12.3 -- the same toolchain v0.21.7 shipped, so no npm/pip/uv flag in this
-# Dockerfile needed re-checking for the bump.
-ARG HERMES_AGENT_VERSION=v0.22.0
+# npm 12.0.2, uv 0.12.3 -- the same toolchain v0.22.0 shipped, so no npm/pip/uv flag in this
+# Dockerfile needed re-checking for the bump. v0.22.1's base Dockerfile is NOT byte-identical
+# to v0.22.0's: it adds `--cache /opt/hermes/uv-cache` to its own `pm.build_env` stage (543
+# lines vs 537), a base-internal build-stage change that does not touch this image. The base
+# runtime is unchanged -- pm/lock.json is byte-identical between the two tags (python 3.14.7,
+# node 26.7.0, npm 12.0.2, uv 0.12.3) -- and SQLITE_AUTOCONF_VERSION is still 3530400 in both,
+# so the sqlite CLI pin below is untouched.
+ARG HERMES_AGENT_VERSION=v0.22.1
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
@@ -21,7 +27,7 @@ ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
 ARG PPT_MASTER_VERSION=v6.7.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.138.0
+ARG DOCLING_VERSION=2.139.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=331fa474e26e428e2e6af1143b2fdab19cee492d7d21897b8899ce1c14755662
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.29.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=7b27accfa545169ad070efb8a6679b25d63acc8513bbc0c05937c3ce94c13ea5
 ARG PDFCPU_VERSION=0.16.2
@@ -31,8 +37,19 @@ ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
 ARG CLAWMEM_VERSION=0.43.3
-ARG RTK_VERSION=v0.51.0
-ARG RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
+# RTK ships two editions from the same tag: `rtk-<target>` (Apache-2.0 CLI linking the
+# BUSL-1.1 `rtk-engine`) and `rtk-oss-<target>` (Apache-2.0 only). This image takes the
+# oss edition: v1.0.0 split the compression engine out under BUSL-1.1 (source-available,
+# Change Date 2030-09-09 -> Apache-2.0), and the oss edition is byte-for-byte equivalent
+# for everything this deployment uses -- rtk-hermes only ever calls `rtk rewrite`, and the
+# `rewrite` verdict + all command filters + `rtk gain` live in the Apache half. Verified on
+# the v1.0.1 bump: 6/6 rewrite verdicts and the `ls`/`git` compressed output are identical
+# between editions, and `rtk rewrite` still returns the rc=3 that rtk-hermes accepts
+# (_RTK_REWRITE_OK_CODES = {0, 3}). Nothing here uses the engine-only pipeline/plugin
+# surface, and nothing referenced the removed `--ultra-compact` flag.
+ARG RTK_VERSION=v1.0.1
+ARG RTK_ASSET=rtk-oss-x86_64-unknown-linux-musl.tar.gz
+ARG RTK_ASSET_SHA256=a44e8ffc43981100b4ddf1710399a1649a6c874591aa6d0c0727fe6cbd983c41
 ARG GH_VERSION=v2.102.0
 ARG GH_ASSET=gh_2.102.0_linux_amd64.tar.gz
 ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH_ASSET}
@@ -41,8 +58,9 @@ ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH
 # /usr/local/lib first via ld.so.conf.d and refuses to run with "header and
 # source version mismatch". Pin the matching tools zip under /usr/local/bin.
 # DO NOT bump this with the base image. The pin is COUPLED to the libsqlite3 the base
-# builds: v0.22.0 still sets `SQLITE_AUTOCONF_VERSION=3530400` upstream (re-checked in the
-# tagged Dockerfile on this bump) and installs
+# builds: v0.22.1 still sets `SQLITE_AUTOCONF_VERSION=3530400` upstream (re-checked in the
+# tagged Dockerfile on this bump -- verified against the real v0.22.0 Dockerfile too: the ARG
+# is 3530400 in both) and installs
 # libsqlite3.so.3.53.4 into /usr/local/lib. A 3.54 CLI resolves that 3.53.4 runtime
 # library first (ld.so.conf.d) and refuses to start -- the exact failure this pin
 # exists to avoid. Latest-tools-zip (3540000) is deliberately NOT taken. Bump only
@@ -124,6 +142,7 @@ RUN curl -fsSL "${BUN_ASSET_URL}" -o "/tmp/${BUN_ASSET_NAME}" \
     && bun --version
 
 RUN curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/${RTK_ASSET}" -o /tmp/rtk.tar.gz \
+    && echo "${RTK_ASSET_SHA256}  /tmp/rtk.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/rtk.tar.gz -C /tmp \
     && install -m 0755 /tmp/rtk /usr/local/bin/rtk \
     && rm -rf /tmp/rtk.tar.gz /tmp/rtk \
@@ -138,7 +157,7 @@ RUN curl -fsSL "${SQLITE_ASSET_URL}" -o /tmp/sqlite-tools.zip \
     && rm -rf /tmp/sqlite-tools.zip /tmp/sqlite-tools \
     && sqlite3 --version
 
-# npm 12 (the base's pinned npm -- 12.0.2 in v0.21.6, v0.21.7 AND v0.22.0, checked in
+# npm 12 (the base's pinned npm -- 12.0.2 in v0.21.6, v0.21.7, v0.22.0 AND v0.22.1, checked in
 # pm/lock.json) removed --unsafe-perm and now hard-errors on
 # unknown CLI flags (EUNKNOWNCONFIG) instead of ignoring them. It was never
 # needed here anyway: npm >= 7 runs lifecycle scripts as root by default, and
@@ -205,12 +224,11 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # package root by the "ClawMem package patches" step further down. The glob
 # here cannot match them.
 #
-# As of v0.22.0 (2026-10-14) the roster is 10 patches, and this bump changed NOTHING: all ten
-# re-applied at fuzz 0 with zero .rej/.orig, and none needed re-anchoring -- the first sweep
-# in this repo's record with neither a retirement nor a re-anchor. (034 was retired earlier,
-# on the v0.21.7 bump.) See the v0.22.0 sweep block below for the per-patch evidence and for
-# 033's now-NAMEABLE retirement trigger (upstream main fixed it on 2026-10-14 but the v0.22.0
-# tag does not carry the fix).
+# As of v0.22.1 (2026-10-14) the roster is 9 patches: 033 was RETIRED on this bump (see the
+# v0.22.1 sweep block below -- upstream main's 357986e58 + 3d8dfc1da landed the same fix, and
+# both are ancestors of the tag). The other nine re-applied at fuzz 0 with zero .rej/.orig and
+# needed no re-anchoring; 016 reports a standalone FAIL only because it depends on 015, and
+# applies clean in lexicographic order. (034 was retired earlier, on the v0.21.7 bump.)
 # `ls patches/*.patch | wc -l` is the truth, not this paragraph: it read 7 through the
 # v2026.9.24 sweep while the disk held 9, and 10 while the disk held 11. Reconcile it
 # against the disk every sweep before trusting any count here.
@@ -477,7 +495,58 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # api_server session logging `Memory provider 'clawmem' registered (5 tools)` + `activated`,
 # and every boot-time dependency re-resolution (pm/recovery.py::_baseline_gaps) exiting 0.
 #
+# 2026-10-15 sweep (v0.22.1 -- git tag 297552a9, claimTag rc.5-v0.22.1, docker index digest
+# sha256:861c9756ed6c558530c73d5c27860343b00c0d5efd6997a1d8ec6416c8a2b485 == stable == latest,
+# release published 2026-10-14T23:59:24Z): roster 10 -> 9.
+# 033 RETIRED -- this is exactly the base bump the v0.22.0 sweep named as its retirement
+#   trigger ("RETIRE IT on the first base bump whose tag contains 357986e58"). The trigger
+#   fired: `gh api compare/v0.22.1...357986e58` == behind 2213, `...2a10164cd` == behind 2212,
+#   `...3d8dfc1da` == behind 2211 -- all three fix(pm) commits are ancestors of the tag, so
+#   the fix IS in v0.22.1. The tagged source confirms it at the level 033 anchored to:
+#   pm/workspace.py stages the placeholder version OUTSIDE the `if virtual:` branch
+#   (line 281: `if project is not None and "version" not in project and "version" not in
+#   project.get("dynamic", ()): project["version"] = "0.0.0"`), i.e. 3d8dfc1da's superset
+#   form, while line 274 still only writes [project].name for the virtual branch. A real
+#   `patch -p1 --dry-run` of 033 on a pristine v0.22.1 tree now reports "Hunk #1 FAILED at
+#   283", and the REVERSE dry-run fails too (upstream reworded the surrounding block), which
+#   is the "content superseded" state rather than the "already applied" one. Upstream also
+#   generalized the guard: 033 skipped a member that declared ANY version (static or in
+#   project.dynamic) by keeping the old manifest-only path; v0.22.1 checks `dynamic`
+#   explicitly, which is the PEP 621-correct form.
+# THE OTHER NINE all KEEP and needed no re-anchoring: 007, 008, 011, 014, 015, 016, 018, 032,
+#   035 re-applied in lexicographic order at fuzz 0 with zero .rej/.orig. (016 alone reports
+#   FAILED when dry-run on its own -- it depends on 015's _ensure_store_excludes(), exactly as
+#   its header says; in the real ordered apply it lands clean. This is the
+#   sequential-patch-dependency trap, not drift.)
+# Each premise was re-confirmed against the tagged source, not inferred from issue state:
+#   no `file_read` in toolsets.py or hermes_cli/setup_quick.py (008; #44347 still OPEN);
+#   no active_turn_pid / active_turn_owner_alive anywhere under gateway/ or agent/ (011;
+#   #85207/#85285 still OPEN -- upstream still keys off _is_fresh_gateway_interruption with
+#   the old _set_turn_marker_locked signature); exactly one
+#   `extra_body={"response_format"` left in title_generator.py, i.e. still unconditional (014);
+#   no node-compile-cache/ in checkpoint_manager.DEFAULT_EXCLUDES (015; #78888 OPEN);
+#   `_repair_bare_repo_dirs` still 0 hits tree-wide (016; #65349/#83036 OPEN);
+#   no `_is_opencode_custom_name` (018, office-specific); `_skill_diff_char_budget` absent
+#   while the flat `len(out) > 3000` cap still sits in gateway/slash_commands.py (032);
+#   plugins/platforms/matrix/adapter.py still never calls `set_reaction_handler` and has no
+#   m.room.redaction handler (035).
+# 014 NOTE (premise narrowed, patch KEPT): upstream's 3c675019f landed in this tag and gave
+#   the auxiliary client a `_is_structured_output_rejection` retry ladder plus a DeepSeek
+#   profile declaring `unsupported_response_formats=("json_schema",)`, and title generation
+#   routes through that client -- so an unconditional response_format is no longer a HARD
+#   failure. It is still a guaranteed-wasted round trip per session, and #85713 (retry
+#   cascade) is still OPEN, which is the condition 014's header names ("Keep until #85713
+#   merges upstream"). Not retired on this bump; revisit when #85713 lands.
+# VERIFIED on this bump: 9 x `patch -p1` in lexicographic order on a pristine v0.22.1 tree
+#   (83 MB tarball from codeload) -> rc=0 on every patch, fuzz=0, zero .rej/.orig, all 14
+#   touched files py_compile clean, and 9/9 mechanism assertions PASS on the freshly applied
+#   tree (one grep per patch on the symbol the patch was written around). The clawmem roster
+#   was checked too: 036's three targets (src/limits.ts, src/llm.ts, src/splitter.ts) still
+#   exist in clawmem 0.43.3 and the patch dry-runs clean against the packed tarball.
+#
 # Previous sweeps:
+# v0.22.0 / e06df9c2 (2026-10-14): roster stayed at 10, zero retire / zero re-anchor. See the
+#   dedicated v0.22.0 block above for 033's then-unmet retirement trigger.
 # v2026.9.14 / v0.21.3: roster stayed at 8; 7 of 8 re-applied offset-only and
 #   014 was re-anchored (upstream inserted reasoning_config={"enabled": False}
 #   at its call site).
