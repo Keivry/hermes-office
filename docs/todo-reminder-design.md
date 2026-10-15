@@ -103,15 +103,25 @@ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS item(
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   title             TEXT NOT NULL,
-  notes             TEXT NOT NULL DEFAULT '',
+  notes             TEXT NOT NULL DEFAULT '',                   -- 详情（show / list --notes 给全文）
   category          TEXT NOT NULL DEFAULT 'personal',           -- work | personal | 任意自定义
   kind              TEXT NOT NULL CHECK(kind IN('task','repeat','date')),
   status            TEXT NOT NULL DEFAULT 'open' CHECK(status IN('open','done','dropped')),
-  due_at            TEXT,                                       -- task: 'YYYY-MM-DD[ HH:MM]'
+  -- start_at / due_at 是「一段时间」的两端，只有 task / repeat 用
+  --   task：start = 开始日（默认今天）、due = 截止日（NULL = 无截止，天天出现且不标逾期）
+  --   repeat：start = 系列起点（唯一锚点）、due = 系列终点（NULL = 永久重复）
+  --   date：两者都不用（走 solar_* / lunar_*）
+  start_at          TEXT,                                       -- 'YYYY-MM-DD'
+  due_at            TEXT,
   next_due_at       TEXT,                                       -- after: 的运行期锚点（完成日+N）；every: 恒 NULL
   calendar          TEXT NOT NULL DEFAULT 'solar' CHECK(calendar IN('solar','lunar')),
-  lunar_month       INTEGER,                                    -- date+lunar 时必填
+  -- 纪念日（kind='date'）的月-日：公历走 solar_*，农历走 lunar_*；年份可空（空 = 不显示第 N 年）
+  solar_month       INTEGER,
+  solar_day         INTEGER,
+  solar_year        INTEGER,
+  lunar_month       INTEGER,
   lunar_day         INTEGER,
+  lunar_year        INTEGER,
   lunar_prefer_leap INTEGER NOT NULL DEFAULT 1,                 -- 1=有闰月按闰月
   repeat_rule       TEXT,                                       -- JSON，见 §5
   lead_days         INTEGER NOT NULL DEFAULT 0,
@@ -120,6 +130,18 @@ CREATE TABLE IF NOT EXISTS item(
   room              TEXT,                                       -- 覆盖默认房间；NULL=按 category 映射
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL
+);
+
+-- 子任务清单：只挂 kind='task'（v1）。随条目级联删（purge 时自动清）。
+-- 刻意不复用 item 表：那样会污染 _numbering_rows() 的行号语义（子任务会占一个行号）。
+CREATE TABLE IF NOT EXISTS subtask(
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id    INTEGER NOT NULL REFERENCES item(id) ON DELETE CASCADE,
+  title      TEXT NOT NULL,
+  state      TEXT NOT NULL DEFAULT 'pending' CHECK(state IN('pending','done')),
+  position   INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 -- 期次：task 有 due_at → 1 条；repeat → 每期 1 条；date → 每年 1 条
@@ -164,11 +186,18 @@ CREATE TABLE IF NOT EXISTS reaction_seen(
   action            TEXT NOT NULL,
   seen_at           TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_occ_item   ON occurrence(item_id, occurrence_date);
+CREATE INDEX IF NOT EXISTS idx_occ_date   ON occurrence(occurrence_date);
+CREATE INDEX IF NOT EXISTS idx_rem_date   ON reminder(notify_date);
+CREATE INDEX IF NOT EXISTS idx_key_item   ON reminder_key(item_id);
+CREATE INDEX IF NOT EXISTS idx_sub_item   ON subtask(item_id, position, id);
 ```
 
 ### 4.2 历史库 `state/todo/history.db`（追加型，永不修改）
 
-独立文件、独立 `meta`（自己的 `schema_version`，迁移节奏与热库解耦），
+独立文件、独立 `meta`（各有自己的 `schema_version` 值，**但两库共用同一个 `SCHEMA_VERSION`
+常量、版本不符时一起清空重建** —— 升热库版本会连历史库一起重建，"迁移节奏解耦"只说对了一半），
 因此可以单独备份、单独迁移、单独查询 —— 热库的日常备份不会被历史体积拖大。
 
 ```sql
@@ -231,8 +260,8 @@ def record_event(con, action, *, item=None, occ=None, before=None, after=None, c
 1. **单一入口**：所有写操作都经 `store.record_event(action, item, occ, before, after, ctx)`，
    并与数据变更写在**同一个 `with con:` 事务**里 —— 数据落了历史必落；写历史失败则数据一起回滚。
 2. **历史不可变**：`item_event` 只有 INSERT 与 SELECT，任何代码路径不得 UPDATE/DELETE 它
-   （测试用 `sqlite3.set_authorizer`，按回调第 4 参 `db_name == "hist"` 断言 UPDATE/DELETE 被拒，
-   不影响热库正常写 —— 见 T2b）。
+   （`sqlite3.set_authorizer` 那条断言测试**当年规划的 T2b 没有落地**，现存测试未覆盖；靠代码评审与
+   `store/audit.py` 只 SELECT 的读路径保证）。
 3. **删除语义**：`rm` = 软删（`status='dropped'` + `deleted_at`）并写 `delete` 事件；物理删除只走
    `purge`（需 `--yes`），写 `purge` 事件，`occurrence`/`reminder` 一并删但 **`item_event` 全留**。
 
@@ -256,7 +285,8 @@ def record_event(con, action, *, item=None, occ=None, before=None, after=None, c
 对本系统来说漂移方向正好是最坏那种：**待办状态改了，但历史没记**。所以：
 
 > **铁律：`todo.db` 与 `history.db` 都必须 `journal_mode=DELETE`（或 TRUNCATE/PERSIST），
-> 永远不要改成 WAL。** 在 `open_db()` 里显式设置并写进测试（`test_journal_mode_is_not_wal`）。
+> 永远不要改成 WAL。** 两道防线：`open_db()` 每次显式设置 + `doctor` 每次体检
+> （曾计划加一条 `test_journal_mode_is_not_wal` 单测，**实际没有落地** —— 别按它排障）。
 
 代价是失去 WAL 的读写并发。本系统负载是「每天几次用户写 + 一次 tick」，单用户单机，
 `busy_timeout=5000` 足够；WAL 在这里收益为零、风险为实。
@@ -271,13 +301,17 @@ def record_event(con, action, *, item=None, occ=None, before=None, after=None, c
 - `repeat`：点击 → **仅**该 occurrence `done`，条目继续存在，下一期由 tick 自动物化。
 - `date`：点击 → **仅**当年 occurrence `done` =「今年已祝福」，无「完成」概念。
 
-**提醒窗口**：`notify_date = occurrence_date - lead_days`。
+**提醒窗口**：`notify_date = occurrence_date - lead_days`（`lead_days` 有 `MAX_LEAD_DAYS=36500` 兜底）。
 
-- `task`（无 `due_at`）：每天出现在列表，直到 done。
-- `task`（有 `due_at`）/ `repeat`：`today >= notify_date` 起提醒，逾期继续提醒并标「逾期 N 天」。
+- `task`（无 `due_at`）：每天出现在列表，直到 done，**不标逾期**（无截止就无所谓逾期）。
+- `task`（有 `due_at`）：提醒门 = **`start_at − lead`**；`start ≤ today < due` 标「进行中」，
+  `today == due` 标 `⏰`，过了 `due` 标 `❗逾期 N 天` 并继续提醒。
+- `repeat`：`today >= notify_date` 起提醒，逾期继续提醒并标「逾期 N 天」；过了系列终点不再出期次。
 - `date`：`notify_date <= today <= occurrence_date`，当天过后停（不点也不删）。
 
 **物化窗口**：tick 每次补算 `[today-7, today+400]`（task/repeat 其实只用到 +60，统一 400 更简单且幂等）。
+task 的下界取 `min(today−7, due_at)`，且 `collect_today` 另外捞 `occ_date < today−7` 仍 pending 的
+task 期次 —— 逾期 >7 天的条目**不许消失**（D7）。
 
 ## 5. 命令契约与消息模板
 
@@ -285,11 +319,13 @@ def record_event(con, action, *, item=None, occ=None, before=None, after=None, c
 
 ```
 /todo add 买牛奶 今天 个人              # 位置参数由 todo.py 解析
-/todo add --kind repeat --rule weekly:1 --title 周会材料 --category work
-/todo add --kind date --calendar lunar --lunar 8-15 --lead 7 --title 妈妈生日
-/todo add --kind date --due 03-15 --title 老婆生日 --category personal
-                                        # 公历生日；--due 可省年份，date 默认 lead=7
-/todo list [--category work] [--all] [--json]
+/todo add --kind repeat --rule weekly:1 --start 2026-11-02 --due 2027-01-31 --title 周会材料 --category work
+/todo add --kind date --lunar 8-15 --title 妈妈生日          # 农历，可写 --lunar 1950-8-15 记年份
+/todo add --kind date --date 03-15 --title 老婆生日 --category personal
+                                        # 公历生日，可写完整 --date 1990-03-15（记年份 → 显示「第 N 年」）
+/todo add 报销 --due 2026-10-01 --notes "发票在抽屉"  # 补一条早该做的事：start 跟着到那天，一上来就逾期
+/todo sub add 3 买牛奶 · /todo sub list 3 · /todo sub done 3 2   # 子任务（只挂 kind=task）
+/todo list [--category work] [--all] [--json] [--notes]   # --notes = 展开备注全文
 /todo today [--category work]
 /todo done 3        # 也接受 #3
 /todo undo 3
@@ -304,26 +340,34 @@ CLI 完整签名（`todo.py`，argparse）：
 --source S --actor U --actor-name N --room R --html-out PATH
 #   --html-out 只对报表型命令（list/today/show/history）写文件；list --json 与回执/help 明确不写
 
-add    --title/位置参数  [--kind task|repeat|date] [--category C] [--due "YYYY-MM-DD[ HH:MM] | MM-DD"]
-       [--rule SPEC] [--lead N] [--calendar solar|lunar] [--lunar M-D] [--notes S]
+add    --title/位置参数  [--kind task|repeat|date] [--category C]
+       [--start D] [--due D]                # 只收完整日期 YYYY-MM-DD（也认 今天/明天/后天/周X）
+       [--date D]                           # kind=date 公历：MM-DD 或 YYYY-MM-DD
+       [--rule SPEC] [--lead N] [--calendar solar|lunar] [--lunar M-D|YYYY-M-D] [--notes S]
        [--priority N] [--item-room !room:server]
-edit   ID|#ID [--title T] [--due D] [--rule SPEC] [--lead N] [--category C] [--priority N]
-       [--notes S] [--calendar solar|lunar] [--lunar M-D] [--item-room R]
-list   [--category C] [--kind K] [--all] [--json]
-today  [--category C]
-show   ID|#ID                              # 当前状态 + 历史时间线
+edit   ID|#ID [--title T] [--start D] [--due D] [--date D] [--rule SPEC] [--lead N]
+       [--category C] [--priority N] [--notes S] [--calendar solar|lunar]
+       [--lunar M-D] [--item-room R]
+list   [--category C] [--kind K] [--all] [--json] [--notes]
+today  [--category C] [--date YYYY-MM-DD]
+show   ID|#ID                              # 当前状态 + 备注全文 + 子任务 + 历史时间线
 history [ID|#ID] [--limit 30] [--all]      # 无 ID = 最近 N 条（跨库合并；N=TODO_HISTORY_DEFAULT_LIMIT，默认 30）
 log    [--since D] [--until D] [--action A] [--category C] [--json]
 export-history --out F [--since D] [--until D] [--format jsonl|csv]   # 归档（历史库专用）
 doctor [--reconcile]                       # 两库健康检查 / 对账（见 T9c）
+tick   [--dry-run] [--date D] [--category C] [--slot 09|12|20]   # --slot = 手动指定时段（补跑/复现用）
 done   ID|#ID     [--date YYYY-MM-DD]      # --date = 补记的完成日：先认 ≤ 该日最早的未完成期次，
-                                           #   没有才按期建行（回执写「期次 X · 补记日 D」）
-undo   ID|#ID
+                                           #   没有才按期建行（回执写「期次 X · 补记日 D」）；
+                                           #   task 完成会级联把子任务一起置 done
+undo   ID|#ID                              # task 撤销会复原子任务（含此前已单独勾完的）
 rm     ID|#ID                              # 软删（写 delete 事件）
-purge  ID|#ID --yes                        # 物理删（写 purge 事件，历史保留）
-tick   [--dry-run] [--date YYYY-MM-DD] [--category C]
+purge  ID|#ID --yes                        # 物理删（写 purge 事件，历史保留；子任务级联清）
+sub    add ID 标题 | list ID | done ID 序号 | undo ID 序号 | rm ID 序号
+                                           # 只挂 kind=task；子任务全勾完 → 父项自动完成
+tick   [--dry-run] [--date YYYY-MM-DD] [--category C] [--slot 09|12|20]
 react  --action add|remove [--emoji E] [--msg-event-id X] [--reaction-event-id Y]
-       [--user U] [--room R]
+       [--redaction-event-id Z]
+       [--user U] [--room R]               # 内部命令：只给 reaction hook 调，不写进 help
 selftest
 ```
 
@@ -332,8 +376,10 @@ selftest
 条目 id（`AUTOINCREMENT`，删除后不复用，永远精确）。7 个入口（`edit/show/history/done/undo/rm/purge`）
 同口径：越界/非法报 `❌ …` 且 **rc=2、零写入**；已删条目**不占行号**，在 `list --all` 里显示成 `(已删) #id`。
 
-**退出码（2026-10-14 统一）**：`0` 成功 · `1` 内部错误 · `2` 没做成（所有 `❌` 开头的提示：编号越界/非法、
+**退出码（2026-10-14 统一）**：`0` 成功 · `1` 内部错误 · `2` 没做成（编号越界/非法、
 无变更、缺参数、已是目标状态）。脚本/cron 按退出码判断，不要再返回「错误串 + rc=0」。
+两类缺参数都归 2：CLI 自己判的给 `❌ …` 提示；argparse 自身的缺必填参数打印 `usage: …`（不带 `❌`，
+但同样是 rc=2，别只按 `❌` 前缀判定失败）。
 
 **报表自带 HTML（2026-10-14）**：`list`/`today`/`show`/`history` 生成 Element X 友好的 HTML
 （`render.doc_to_html` / `text_to_html`，词汇表只有 `<p>`/`<strong>`），由 `--html-out` 落盘、插件经
@@ -345,31 +391,36 @@ selftest
 `every:60d`(固定节奏，未完成也照常出下一期) / `after:60d`(完成后起算，证书续签这类)
 （周几 1=周一 … 7=周日；`monthly:-1` = 该月最后一天；间隔单位 `d`/`w`/`m`/`y`，**可省 = 天**）。
 
-`every:` / `after:` 的首个日期同样用 `--due`（不写 = 今天），运行期锚点另有口径：
-`every:` 恒用「首次日期 + k×N」（`item.next_due_at` 为 NULL）；`after:` 的锚点是**完成日 + N**
-（存在 `item.next_due_at`，完成时推进、撤销时回退）。两者的 `--lead` 默认取 `TODO_LEAD_INTERVAL`
-（未设 = 0），其余规则仍用 `TODO_DEFAULT_LEAD_*`（详见文末「更新记录（2026-10-13）：间隔重复规则」）。
+**重复系列的起点一律是 `--start`**（rev.5 统一，不写 = 今天）：`every:` / `after:` / 周期规则
+（`weekly:`/`monthly:`/`yearly:`）共用同一个锚点，`--due` 只表示**系列终点**（不写 = 永久重复）。
+运行期锚点另有口径：`every:` 恒用「起点 + k×N」（`item.next_due_at` 为 NULL）；`after:` 的锚点是
+**完成日 + N**（存在 `item.next_due_at`，完成时推进、撤销时回退）。两者的 `--lead` 默认取
+`TODO_LEAD_INTERVAL`（未设 = 0），其余规则仍用 `TODO_DEFAULT_LEAD_*`
+（详见文末「更新记录（2026-10-13）：间隔重复规则」与「更新记录（2026-10-15）：时间段模型」）。
 
-`--due` 的公历日期接受 `YYYY-MM-DD` 与 `MM-DD`：后者由 `_normalize_due()` 补成「下一个未到的
-该月日」（含今天；`2-29` 落在非闰年时往后找闰年）。`add` 与 `edit` 走同一校验，非法日期
-（如 `13-45` / `2026-02-30`）报 `❌ --due 不合法：…` 且 **rc=2、不入库**（详见文末「更新记录（2026-10-13）」）。
+`--start` / `--due` 只接受完整日期 `YYYY-MM-DD`（也认 今天/明天/后天/周X）：含糊的 `MM-DD` 不进这两列，
+否则会产出静默死条目。`--date` / `--lunar` 才是月-日入口，`--date MM-DD` 补成「下一个未到的该月日」
+（含今天；`2-29` 落在非闰年时往后找闰年），`--lunar M-D` 由农历转公历。`add` 与 `edit` 走同一校验，
+非法日期报 `❌ …` 且 **rc=2、不入库**（详见文末「更新记录（2026-10-13）」）。
 
 ### 5.2 提醒消息模板（每房一条，胶囊 ≤10，超出分页）
 
 ```
 📋 待办提醒 · 2026-10-12 09:00 · 工作
 
+逾期
+❗ 交房租（每月 1 号 · 逾期 2 天）
+
 今天
 1️⃣ 周会材料（每周一）
-2️⃣ 交房租（每月 1 号，逾期 2 天）
 
 生日 / 纪念日
-3️⃣ 妈妈生日（3 天后 · 10-15）
+2️⃣ 妈妈生日（3 天后 · 10-15）
 
 未来 7 天
 · 周三 结婚纪念日
 
-点击号码表情 = 完成本期 / 再点一次 = 撤销
+点号码表情 = 完成本期 / 再点一次 = 撤销
 ```
 
 点击后**编辑同一条**：
@@ -506,11 +557,13 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 
 状态：**核心已实现并验证**（T0–T13b 完成；T14 端到端 PoC 与 T15 补丁部署等用户输入）。
 
-代码位置 `/opt/data/scripts/todo/`：`todo.py`（CLI 全量子命令；2026-10-14 起为薄入口 + `todo_*.py` 家族）、
-`store/`（包：门面 `__init__.py` + 8 模块，两库/审计/对账）、
+代码位置 `/opt/data/scripts/todo/`：`todo.py`（薄入口 + `todo_*.py` 家族：`todo_cli` argparse、
+`todo_items` 条目命令、`todo_query` 查询、`todo_sub` 子任务、`todo_tick` 物化提醒、`todo_react` 胶囊、
+`todo_health` 体检、`todo_rules` 规则锚点、`todo_view` 视图、`todo_common` 编号/审计）、
+`store/`（包：门面 `__init__.py` + 9 模块，两库/审计/对账/子任务）、
 `sched.py`（农历/重复规则/选取）、`render.py`（渲染与胶囊）、`matrix_edit.py`（`m.replace`）、
 `notify.py`（发送/编辑）、`tick.py`（cron 入口）；测试 `tests/`（**当日** 2 个文件 / 15 条：
-`react_test.py` + `add_test.py`；现为 6 个文件 / 76 条，见文末更新记录）。
+`react_test.py` + `add_test.py`；**现值见文末「更新记录」——13 个文件 / 170 条**）。
 
 ### 与本文档的偏差（都是有原因的选择，不是遗漏）
 
@@ -781,6 +834,69 @@ undo 1                     →  期次 1/2026-10-20/pending  2/2027-10-20/pendin
 （`only_old=['StorePackagePurityTest']`、无新增、无共同差异），搬走类新旧逐字相同；`pytest
 scripts/todo/tests -q` → **76 passed, 5 subtests**（exit 0），用例集按文件名归一后与改前**完全一致**
 （只差那 2 条换了文件）；`ruff check` / `ruff format --check` 对 27 个文件全过。
+
+## 更新记录（2026-10-15）：时间段模型 + 子任务 + 备注详情（schema v3 → v4）
+
+**三件事一次做完**：① 备注/详情能看全；② 三种 kind 各自明确的时间语义（含逾期永不再消失）；
+③ 子任务清单。**schema v3 → v4，不向后兼容**（用户明确「数据可丢、无需兼容」）：`init_db` 见版本
+不符就**清库重建**（drop 全部表 → 按新 `SCHEMA` 重建），重建前自动 `VACUUM INTO` 快照两库
+（`*-schema3-backup-<ts>.db`），另有一份手工 `cp` 备份。旧的 `_migrate_item_next_due_at` /
+`_migrate_reminder_slot` 连同迁移回归用例一起删除，`_migrate()` 留空壳 + 注释。
+
+**时间语义（四个概念、四组列，互不重叠）**：
+
+| kind | `start_at` | `due_at` | 其他 |
+|:--|:--|:--|:--|
+| `task` | 开始日（默认今天；`--due` 写过去时跟着到那天） | 截止日；**NULL = 无截止**：天天出现但不标逾期 | — |
+| `repeat` | **系列起点（唯一锚点）**，不写 = 今天 | **系列终点**，不写 = 永久重复 | `next_due_at` 仅 `after:` 用 |
+| `date` | 不用 | 不用 | `solar_month/day/year`、`lunar_month/day/year` |
+
+- **`date` 去伪年份**：以前公历生日把月-日塞进 `due_at`，年份是 `_normalize_due` 编的假年份
+  （`03-15` → `2027-03-15`）。现在公历走 `solar_*`、农历走 `lunar_*`，`--date 1990-03-15` /
+  `--lunar 1950-8-15` 的年份存进 `solar_year` / `lunar_year`，用来显示「第 N 年」（算出的 N < 1
+  则不显示，防未来日期印出「第 -8 年」）。
+- **`repeat` 起点统一**：以前 `every:`/`after:` 认 `--due` 当锚点，而 `weekly:`/`monthly:`/`yearly:`
+  认「创建日地板」并**忽略**存储的 `--due`（同一份 CLI 两种语义）。现在**一律 `--start`**；
+  `repeat` 的 `--start` 晚于 `--due` 报 `❌ --start … 晚于 --due …`；`--due` 早于首个期日另报
+  「系列终点在第一个期日之前，这条重复永远不会触发」（都是静默死条目，两条都必须拦）。
+- **task 窗口三态**：`start ≤ today < due` = 进行中（`⏳ 进行中 · 截止 MM-DD · 还有 N 天`）；
+  `today == due` 标 `⏰`；过了 `due` = 逾期（`❗` + `<strong>`）。提醒门用 **`start − lead`**
+  （用 `due − lead` 的话「进行中」永远看不到）。`--start` 晚于 `--due` 对 task 是**合法**的
+  （「补一条早该做的事」），逾期判定排在「还没开始」之前。
+- **D7 逾期 >7 天不许消失**（两处都要改，缺一仍会隐形）：① `_materialize_item` 的 task 地板
+  `today−7` → `min(today−7, due)`；② `collect_today` 额外取 `occ_date < today−7` 且仍
+  pending 的 task 期次（`store.pending_task_occurrences_before`）。代价：拖 300 天的任务会
+  每天三档提醒到完成为止 —— 已确认接受。
+- **逾期区**：逾期条目单独成区「逾期」，`render.section_for` 是分区唯一来源（发送与 `m.replace`
+  共用），胶囊编号**分区后按显示顺序**重排（否则逾期区会显示成 `2️⃣ 3️⃣ … 1️⃣`）。
+
+**子任务（v1 只挂 `kind='task'`）**：新表 `subtask(id, item_id, title, state, position, created_at,
+updated_at)`，**刻意不复用 `item` 表**（会污染 `_numbering_rows()` 的行号语义）。CLI 是嵌套子命令
+`sub add|list|done|undo|rm`（`store/subtasks.py`，`MAX_SUBTASK_TITLE=200`、`MAX_SUBTASKS` 上限）。
+级联：手动完成父项 → 未完成子任务全部 done；撤销 → 全部复原；**子任务全勾完 → 父项自动完成**。
+`sub undo` 单条撤销**不碰**兄弟子任务（`undo_complete(cascade_subtasks=False)`）。子任务**不**
+走表情胶囊（一条提醒消息只有自己的胶囊位），仍是 CLI-only。
+
+**新增/改动的列与表**：`item` 加 `start_at`、`solar_month`、`solar_day`、`solar_year`、`lunar_year`；
+新增 `subtask`。`store.health.doctor` 增查 schema 版本、纪念日月/日完整性、`subtask` 表。
+
+**命令面变化**：`--start` / `--date` / `list --notes`；`show` 出备注全文 + 子任务；`sub` 家族。
+`--start`/`--due` 只收完整 `YYYY-MM-DD`（也认 今天/明天/后天/周X），`MM-DD` 归 `--date`；
+`--calendar lunar` 与 `--date` 互斥；空串日期（`--due ""`）按「没给」报 rc=2，不再静默当无截止。
+`--lead` 上限 3650 天、农历日 1–30（31 曾会被静默钳）、`notify_date` 的 `lead_days` 有
+`MAX_LEAD_DAYS=36500` 兜底（否则 `OverflowError` 会带走整个 tick）。
+
+**测试**：新增 `start_at_test.py`、`date_flag_test.py`、`lunar_test.py`、`subtask_test.py`、
+`overdue_test.py`、`notes_test.py`、`rebuild_test.py`；改写 `add_test.py`（参数校验 + 零写入契约）、
+`interval_test.py`（14 处 `--due` 改写：13 → `--start`、1 处 date → `--date`）、
+`store_package_test.py`（门面新符号 + `subtasks.py` 在纯度扫描内）、
+`numbering_test.py`（**子命令清单自检**：`build_parser()` 的每个子命令都要在 `HELP_TEXT` 出现，
+反向也查 help 里写的命令必须真存在；`react` 是钩子专用内部命令，走白名单）。
+
+**踩过的坑（已写进技能 `todo-reminder`）**：新写的 `date_flag_test.py` 跑非 `--dry-run` 的 `tick`
+且没设离线保险，**真把测试提醒发进了生产房间** —— 胶囊键写在临时库里，生产库没有，用户点号码表情
+全部落空（`reaction.log` 里一片 `ignored（找不到对应的完成记录）`）。结论：**换 `TODO_DB` ≠ 不联网**，
+测试/探针跑 `tick` 必须 `--dry-run` **且** `TODO_MATRIX_ENV_FILE=<不存在>`。
 
 ## 上线配置（2026-10-12，已生效）
 
