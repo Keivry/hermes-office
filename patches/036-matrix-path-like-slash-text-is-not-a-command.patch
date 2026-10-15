@@ -1,0 +1,112 @@
+# 036-matrix-path-like-slash-text-is-not-a-command.patch
+#
+# Local patch -- NOT an upstream PR. Checked 2026-10-15 against upstream main
+# (raw.githubusercontent.com/NousResearch/hermes-agent/main/plugins/platforms/matrix/adapter.py, downloaded
+# to a scratch copy): main still carries the same bare-prefix stamping, so the gap is open upstream and
+# there is no issue or PR to cite. Related but DIFFERENT: #138895 / #138896 (Mattermost text posts refused
+# by native admission -- media_urls=None); that one never involves MessageType.COMMAND.
+#
+# Why: durable native admission (gateway/session_envelope.py::_validate_native, new in v0.22.1) refuses an
+# event whose message_type is MessageType.COMMAND when get_command() is falsy:
+#
+#     session_ingress.py:24 admit_message -> session_authority.py:338 _admit_native ->
+#     session_envelope.py:118 prepare_native -> session_envelope.py:69 _validate_native
+#     -> RuntimeStoreError('invalid_params')
+#
+# and the Matrix adapter stamped that type from the leading slash alone:
+#
+#     extra["message_type"] = MessageType.COMMAND if body.startswith("/") else MessageType.TEXT
+#
+# MessageEvent.get_command() deliberately returns None for a path-like first token ("Reject file paths:
+# valid command names never contain /"), and the router enters the admission lane exactly when
+# get_command() is falsy (run_inbound.py::_hm_authority_admission). So any "/"-prefixed message whose
+# first token contains a slash -- "/opt/data commit & push", "/tmp/x is broken", "/usr/local/bin is
+# huge" -- was typed COMMAND *and* classified as a non-command: it landed in the command lane and was
+# rejected there before any turn ran, with the generic "Sorry, I encountered an error (RuntimeStoreError).
+# invalid_params" user-facing reply. Real commands are unaffected because they are dispatched as commands
+# (their get_command() is truthy, so they never enter that lane); a "-"-prefixed non-command such as
+# "!model sonnet" is unaffected because the adapter resolves known bang aliases to "/model ..." first and
+# unknown ones stay TEXT.
+#
+# After: the stamped type comes from the router's own classifier (MessageEvent.get_command), so a
+# path-like leading token stays MessageType.TEXT and the event is admitted normally, while every real
+# command is still MessageType.COMMAND. Nothing else about bang normalization, media typing, or reply
+# stripping changes.
+#
+# Considered and rejected:
+#   (1) Dropping the `message_type == MessageType.COMMAND` clause from _validate_native: that clause is
+#       the whole reason genuine command turns bypass native admission, so it is load-bearing; loosening
+#       a security-boundary check to work around a mislabelled producer would be the wrong end of the
+#       wire. (Root cause is the producer, not the gate.)
+#   (2) Re-deriving the command rule inline ("first token, lowercased, no slash"): a second copy of a rule
+#       the router already owns is exactly how the two drifted apart in the first place.
+#   (3) Teaching event.py to expose the classifier as a module-level helper and calling it from here:
+#       touches a core gateway file for no runtime gain; the probe object below costs one MessageEvent
+#       construction per inbound text message (the same adapter already builds several).
+#
+# Scope note: the identical bare-prefix test also exists in slack/adapter.py (is_command_text =
+# command_probe_text.startswith("/")), discord/adapter.py, mattermost/adapter.py, weixin.py and
+# relay/ws_transport.py. This patch deliberately fixes only Matrix -- the one this deployment routes
+# through -- and each of those channels needs its own verification before it is changed.
+#
+# Runtime files only: plugins/platforms/matrix/adapter.py
+#
+# Verified on a fresh pristine v0.22.1 tree (83 MB tarball, the same tree the 9-patch roster was
+# verified against): the 9 existing patches applied in lexicographic order, then this one --
+# `patch -p1` rc=0, fuzz=0, zero .rej/.orig, the second hunk landing at offset +16 lines (expected:
+# patches 007 and 035 both insert lines above it in this file), `py_compile` clean, marker
+# `def _matrix_command_message_type(` present exactly once, no leftover `body.startswith("/")`
+# stamping, and a reverse `patch -p1 --dry-run` that succeeds.
+#
+# Behavioural evidence was taken red/green on that same applied tree, with a throwaway pytest module
+# (7 cases) that drives _handle_text_message and asserts the type that reaches handle_message:
+#   - reverse-apply THIS patch -> 3 failed, 4 passed. The 3 failures are exactly the path-like bodies
+#     ("/opt/data commit & push", "/tmp/x is broken", "/usr/local/bin is huge"): typed COMMAND with
+#     get_command() None, i.e. the combination _validate_native refuses.
+#   - re-apply it -> 7 passed. The same 3 bodies now arrive as TEXT, and the 4 command-shaped bodies
+#     (real "/skills pending" -> skills, "/reset" -> reset, "/model gpt-5" -> model, and unresolved
+#     "!important note" staying text) keep the same type with and without the patch.
+#   - the 3 existing Matrix suites (test_matrix.py + test_matrix_message_event_metadata.py +
+#     test_matrix_media_filename.py) stayed at 140 passed with the patch applied.
+#
+# Re-anchor on a base bump: two hunks -- a new module-level helper after _normalize_matrix_bang_command,
+# and the one-line assignment inside _build_...event. If upstream renames or moves either anchor,
+# re-anchor; drop the patch once upstream classifies the type from get_command() itself.
+diff --git a/plugins/platforms/matrix/adapter.py b/plugins/platforms/matrix/adapter.py
+index 57368d72..75a48f00 100644
+--- a/plugins/platforms/matrix/adapter.py
++++ b/plugins/platforms/matrix/adapter.py
+@@ -165,6 +165,22 @@
+     if resolved is None:
+         return text
+     return f"/{resolved}{match.group(2) or ''}"
++
++
++def _matrix_command_message_type(body: str) -> MessageType:
++    """Type ``body`` the way the router will read it: COMMAND only for a real command.
++
++    A leading ``/`` is not the test the router uses. ``MessageEvent.get_command()`` returns None
++    for a path-like first token (``# Reject file paths: valid command names never contain /``), so
++    ``/opt/data commit & push`` / ``/tmp/x is broken`` are ordinary chat text about a path. Stamping
++    ``MessageType.COMMAND`` from the prefix alone put those events in the command lane, where durable
++    native admission refuses an event that is typed COMMAND without being a command
++    (``session_envelope._validate_native`` -> ``RuntimeStoreError('invalid_params')``) and the turn
++    died before it started. Ask the router's own classifier rather than re-deriving the rule, so the
++    stamped type and the command classification cannot drift apart again.
++    """
++    probe = MessageEvent(text=body, message_type=MessageType.TEXT)
++    return MessageType.COMMAND if probe.get_command() else MessageType.TEXT
+ 
+ 
+ # Reply fallback prefix: "> <@alice:example.org> quoted\n> more\n\nactual reply".
+@@ -2163,7 +2179,9 @@
+         if media_msgtype is None:
+             # Re-normalize after reply stripping so ``> quoted\n\n!model`` is still a command.
+             body = _normalize_matrix_bang_command(body)
+-            extra["message_type"] = MessageType.COMMAND if body.startswith("/") else MessageType.TEXT
++            # Not "starts with /" -- see _matrix_command_message_type: a path-like first token is
++            # chat text, and typing it COMMAND made native admission reject the event outright.
++            extra["message_type"] = _matrix_command_message_type(body)
+         elif _is_bare_media_filename(media_msgtype, body):
+             body = ""  # transport filename, not user text
+         return MessageEvent(
