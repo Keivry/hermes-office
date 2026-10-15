@@ -224,11 +224,15 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # package root by the "ClawMem package patches" step further down. The glob
 # here cannot match them.
 #
-# As of v0.22.1 (2026-10-14) the roster is 9 patches: 033 was RETIRED on this bump (see the
+# As of v0.22.1 (2026-10-14) the roster was 9 patches: 033 was RETIRED on that bump (see the
 # v0.22.1 sweep block below -- upstream main's 357986e58 + 3d8dfc1da landed the same fix, and
 # both are ancestors of the tag). The other nine re-applied at fuzz 0 with zero .rej/.orig and
 # needed no re-anchoring; 016 reports a standalone FAIL only because it depends on 015, and
 # applies clean in lexicographic order. (034 was retired earlier, on the v0.21.7 bump.)
+# 036 was ADDED on 2026-10-15 WITHOUT a base bump (roster 9 -> 10) -- see its own block near the
+# end of this header. Note the number is the NEXT ONE IN THIS ROSTER, independent of
+# patches/clawmem/036: the two rosters are applied by different globs against different trees and
+# have never shared a sequence.
 # `ls patches/*.patch | wc -l` is the truth, not this paragraph: it read 7 through the
 # v2026.9.24 sweep while the disk held 9, and 10 while the disk held 11. Reconcile it
 # against the disk every sweep before trusting any count here.
@@ -541,8 +545,31 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   (83 MB tarball from codeload) -> rc=0 on every patch, fuzz=0, zero .rej/.orig, all 14
 #   touched files py_compile clean, and 9/9 mechanism assertions PASS on the freshly applied
 #   tree (one grep per patch on the symbol the patch was written around). The clawmem roster
-#   was checked too: 036's three targets (src/limits.ts, src/llm.ts, src/splitter.ts) still
+#   was checked too: the CLAWMEM roster's own 036 (src/limits.ts, src/llm.ts, src/splitter.ts) still
 #   exist in clawmem 0.43.3 and the patch dry-runs clean against the packed tarball.
+#
+# 2026-10-15 (no base bump; still v0.22.1): roster 9 -> 10. 036 ADDED --
+#   matrix-path-like-slash-text-is-not-a-command. A live failure on this deployment
+#   (RuntimeStoreError('invalid_params') at 16:19:03 / 16:19:25 / 16:25:23 / 16:25:42 / 16:59:11,
+#   two Matrix DM rooms, every failing body a "/"-prefixed message whose first token contains a
+#   slash) traced to the Matrix adapter stamping MessageType.COMMAND from a bare leading "/":
+#   MessageEvent.get_command() deliberately returns None for a path-like token, the router enters
+#   the admission lane exactly when get_command() is falsy, and v0.22.1's durable native admission
+#   refuses a COMMAND-typed event that is not a command -- so ordinary text about a path died
+#   before any turn ran, while real slash commands were dispatched as commands and were fine.
+#   The fix derives the stamped type from the router's own classifier instead of re-testing the
+#   prefix. NOT an upstream PR: upstream main still carries the bare-prefix test as of 2026-10-15
+#   and no issue covers it (#138895/#138896 are the unrelated Mattermost media_urls case; the
+#   prefix test also exists in slack/discord/mattermost/weixin/relay, untouched here).
+# VERIFIED: 10 x `patch -p1` in lexicographic order on a fresh pristine v0.22.1 tree -> rc=0 on
+#   every patch, fuzz=0, zero .rej/.orig (036's second hunk lands at offset +16, expected: 007 and
+#   035 both insert above it), adapter.py py_compile clean, marker `def _matrix_command_message_type(`
+#   present exactly once and zero leftover `MessageType.COMMAND if body.startswith`, plus a real
+#   behavioural red/green on that same applied tree: with 036 reverse-applied the 3 path-like bodies
+#   fail (typed COMMAND, which _validate_native refuses) and with it applied they pass, the 4
+#   command-shaped bodies (real slash commands plus resolved and unresolved bang text) keep their
+#   previous type either way, and the 3 existing Matrix suites stay at 140 passed. The throwaway
+#   test module is NOT shipped -- this roster carries runtime files only.
 #
 # Previous sweeps:
 # v0.22.0 / e06df9c2 (2026-10-14): roster stayed at 10, zero retire / zero re-anchor. See the
