@@ -49,7 +49,9 @@
 ## 3. 架构
 
 一个 **tick**（cron 每天 09:00，0 次 LLM）遍历全库、物化期次（occurrence）、按房间发**一条**汇总
-消息，并把「消息 event id + emoji → 条目」写进 DB；用户点胶囊产生的反应经**补丁 035** 转发到
+消息，并把「消息 event id + emoji → 条目」写进 DB；发送成功后**由机器人先播种号码胶囊**（对刚发出的
+消息逐个 PUT `m.reaction`）—— **客户端只把已存在的反应渲染成可点的小气泡**，不播种用户在表情选择器里
+根本找不到号码胶囊；用户点胶囊产生的反应经**补丁 035** 转发到
 `hooks/todo-reaction`，hook 只做转发、判断逻辑全在 `todo.py react` 里，完成后由
 `matrix_edit.py` 用 `m.relates_to.m.replace` **就地编辑**那条提醒消息。
 创建/完成/删除也走 `/todo` **插件斜杠命令**（同样不经过模型）。
@@ -62,6 +64,7 @@
       │  写 reminder(occurrence_id, notify_date) 幂等           │ matrix-send 发送
       │  写 reminder_key(event_id, emoji) → 条目                 ▼
       │                                              Matrix 房间（work / personal）
+      │                                                        │ 播种 1️⃣..🔟（机器人）
       │                                                        │ 点 1️⃣ / 再点一次
       │  reaction:added / reaction:removed                      ▼
       └──────── hooks/todo-reaction/handler.py ◄── 补丁 035 转发反应
@@ -69,6 +72,10 @@
                           ▼
                  todo.py react → 改 DB → matrix_edit.py 编辑原消息（m.replace）
 ```
+
+播种那一步很关键：Matrix 客户端**只把「已存在」的反应渲染成可点的小气泡**，从没出现过的 emoji
+（号码胶囊）在选择器里要翻到符号区才找得到 —— 不播种，用户就点不到、完成信号永远收不到。
+机器人播出去的反应**不会**回流到 hook（`adapter._is_self_sender` 丢掉自己发的），所以不自触发。
 
 **两库分离**：图中每个「改 DB」的箭头都要同时写两个文件 ——
 
@@ -561,9 +568,9 @@ skills/todo-reminder/SKILL.md（技能库，见 T16）
 `todo_items` 条目命令、`todo_query` 查询、`todo_sub` 子任务、`todo_tick` 物化提醒、`todo_react` 胶囊、
 `todo_health` 体检、`todo_rules` 规则锚点、`todo_view` 视图、`todo_common` 编号/审计）、
 `store/`（包：门面 `__init__.py` + 9 模块，两库/审计/对账/子任务）、
-`sched.py`（农历/重复规则/选取）、`render.py`（渲染与胶囊）、`matrix_edit.py`（`m.replace`）、
-`notify.py`（发送/编辑）、`tick.py`（cron 入口）；测试 `tests/`（**当日** 2 个文件 / 15 条：
-`react_test.py` + `add_test.py`；**现值见文末「更新记录」——13 个文件 / 170 条**）。
+`sched.py`（农历/重复规则/选取）、`render.py`（渲染与胶囊）、`matrix_edit.py`（`m.replace` 编辑 + `m.reaction` 播种）、
+`notify.py`（发送/编辑/播种）、`tick.py`（cron 入口）；测试 `tests/`（**当日** 2 个文件 / 15 条：
+`react_test.py` + `add_test.py`；**现值见文末「更新记录」—— 15 个文件 / 190 条**）。
 
 ### 与本文档的偏差（都是有原因的选择，不是遗漏）
 
@@ -946,9 +953,17 @@ updated_at)`，**刻意不复用 `item` 表**（会污染 `_numbering_rows()` �
 启动（晚于该 mtime → 加载的就是这份代码）；hook 本体 `/opt/data/hooks/todo-reaction/HOOK.yaml`
 的 `events` 已声明 `reaction:added` / `reaction:removed`。
 
-⚠️ **尚缺功能复验**：还没有一次真实的胶囊点击数（历史库最新事件停在 2026-10-12 17:10），
-所以以上是代码级证据而非端到端证据 —— 首次实点（或撤销）后拿 `state/todo/reaction.log` +
-`history.db` 的 `item_event` 补一次确认。
+✅ **端到端复验完成**（2026-10-16）：真实胶囊点击已跑通 —— 手动播种 1️⃣ 后用户实点，链路
+`reaction.log`（`reaction:added`）→ `reaction_seen` 落库 → `occurrence 1053 pending→done` →
+原消息就地编辑为 `✅ 1️⃣ 备份系统（10:24 完成）` 全部到位（此前 2026-10-13 的结论只有代码级证据）。
+
+🔴 **同次排障发现的真实断点（已修）**：提醒消息**从未播种过号码胶囊反应**，而客户端只把
+「已存在的反应」渲染成可点气泡 —— 消息上没有 chip，用户就点不动。此前"点不了"的观感被误判为
+补丁 035 未生效 / 客户端限制 / 加密房间；服务端取证（personal 房 `@keivry` 的 `m.reaction` = 0 条，
+房内反应全部来自 `@paimon` 的 ✅ 回执）才定位到根因。修法：`matrix_edit.py` 加
+`send_reaction`/`react_many`/`react` + `--emoji` CLI；`notify.py` 加 `seed()`；`todo_tick.py` 发送成功后
+按 `page["keys"]` 播种（失败不连坐已发出的提醒）。机器人自己的反应不会回流到 hook
+（`_is_self_sender` 过滤），故不自触发。测试 +9（`seed_test.py`），全量 190 通过。
 
 ### 已确认不做
 
