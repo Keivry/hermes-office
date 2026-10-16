@@ -238,6 +238,11 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # have never shared a sequence.
 # 037 was ADDED on 2026-10-16 WITH the v0.22.2 base bump (roster 10 -> 11) -- see its own block
 # near the end of this header.
+# 038 was ADDED on 2026-10-16 WITHOUT a base bump (roster 11 -> 12). It is a FOLLOW-UP to 037 on
+# the same symptom and a DIFFERENT root cause: 037 pads reasoning_text onto replayed items that
+# exist, while a turn whose reasoning sidecar was never persisted replays ZERO items and had
+# nothing to pad. BOTH stay -- 037 treats the all-turns-have-sidecars session shape, 038 the
+# orphan-turn shape. See its own block near the end of this header.
 # `ls patches/*.patch | wc -l` is the truth, not this paragraph: it read 7 through the
 # v2026.9.24 sweep while the disk held 9, and 10 while the disk held 11. Reconcile it
 # against the disk every sweep before trusting any count here.
@@ -602,6 +607,37 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   v0.22.2 tree: (None, None, relay) -> False; ("custom", "deepseek-v4.1-flash", relay) -> True.
 #   Both call sites now pass provider + model. Without that deviation this patch is inert here.
 #   Full rationale, the RED->GREEN evidence and the retirement condition are in the patch header.
+#
+#   038 ADDED on 2026-10-16, NO base bump (roster 11 -> 12):
+#   deepseek-responses-orphan-turn-reasoning-synthesis. Same 400 as 037, DIFFERENT root cause, so
+#   it does NOT retire 037 -- both apply. 037's setdefault pad is a no-op on a turn that persisted
+#   no reasoning sidecar at all (_capture_encrypted_item returns None without an encrypted_content
+#   blob, and the relay only mints one when the request carries include:["reasoning.encrypted_content"]),
+#   so that turn replays zero items and the relay rejects every further continuation of the session.
+#   Measured on the real failing history (session 20261016_082835_80b44738, 473 input items): 17 of
+#   106 assistant turns replay zero items; only the LAST one is decisive. Synthesizing the first
+#   orphan, or all but the last, still 400s; synthesizing the last, or all, flips to 200. Padding any
+#   existing item (all 89, first, last, real text, one char, no blob) stays 400, and dropping all
+#   reasoning items stays 400 -- the pad route cannot reach the failing turn. Text must be non-empty
+#   ("" and summary-only both 400). H1 synthesizes the missing item inside _replay_reasoning_items
+#   (placement is load-bearing: inserting into the post-conversion `items` list breaks
+#   function_call/function_call_output pairing and yields "No tool output found ..."), H2 makes
+#   _preflight_encrypted forward a reasoning item that has content but no blob (complementing 037,
+#   which covers the HAS-blob branch). Runtime file: agent/codex_responses_adapter.py alone.
+#   Gate: reuses 037's needs_reasoning_echo(provider, model, base_url) call sites unchanged.
+#   Full rationale, the end-to-end evidence and the retirement condition are in the patch header.
+#
+#   VERIFIED for 038 (2026-10-16): all 12 x `patch -p1` forward-applied in lexicographic order on a
+#   fresh pristine v0.22.2 tree -> rc=0 on every patch, fuzz=0, zero .rej/.orig, and the resulting
+#   agent/codex_responses_adapter.py md5 8a537bfda34d2d1d3a87a46cce29655f -- the exact tree the
+#   end-to-end run below exercised. Behaviour: real failing history through the REAL converter +
+#   preflight, gate OFF -> HTTP 400 reasoning_text; gate ON -> HTTP 200 completed (+17 items = the
+#   17 orphan turns); short-history regression -> HTTP 200. ruff check (project ruff.toml) clean
+#   before and after on the touched file; E501 is not in this repo's ruff select, so the added
+#   comment lines' length is not a defect. The file is not ruff-format-clean upstream (166 would-
+#   reformat hunks in the pristine file) and 038 adds only 2 more of the same kind, so no format
+#   gate is applied to it -- consistent with the file's existing style, e.g. _preflight_encrypted's
+#   own multi-line boolean continuation.
 #
 # VERIFIED on this bump: 11 x `patch -p1` in lexicographic order on a fresh pristine v0.22.2 tree
 #   -> rc=0 on every patch, fuzz=0, zero .rej/.orig, all 16 touched files py_compile clean,

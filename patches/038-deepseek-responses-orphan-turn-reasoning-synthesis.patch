@@ -1,0 +1,133 @@
+# 038-deepseek-responses-orphan-turn-reasoning-synthesis.patch
+#
+# Follow-up to 037, same symptom, DIFFERENT root cause. 037 is NOT sufficient here; keep both.
+# Upstream issue #133792 (OPEN, provider/deepseek, P2).
+#
+# Why 037 is insufficient (measured 2026-10-16, session 20261016_082835_80b44738):
+#   037 pads content:[{type:reasoning_text,text:" "}] onto replayed reasoning items with
+#   setdefault. That is a no-op for a turn that persisted NO reasoning sidecar at all, because
+#   there is no item to pad.
+#     * _capture_encrypted_item() returns None when encrypted_content is empty, so
+#       codex_reasoning_items is never written for that turn. The relay only mints a blob when
+#       the request carries include:["reasoning.encrypted_content"]; when it does not, the
+#       response carries no reasoning item at all and nothing is captured.
+#     * _replay_reasoning_items() therefore replays ZERO items for that turn.
+#   In thinking mode the relay requires the FINAL assistant turn to echo non-empty
+#   reasoning_text. With zero items for that turn every continuation of the session is rejected
+#   with:
+#     HTTP 400: The `reasoning_text` in the thinking mode must be passed back to the API.
+#   The session never recovers on its own (the hole is permanent: the sidecar is never
+#   retro-filled), and the classifier files it as FailoverReason.format_error (retryable=False)
+#   so the recovery ladder never fires.
+#
+# Measured scope (live relay, real failing history, 473 input items):
+#   17 of 106 assistant turns replayed zero reasoning items
+#     [231802,231815,231829,231896,231966,231990,231992,232000,232002,232015,232017,
+#      232019,232021,232023,232025,232035,232042]
+#   Only the LAST orphan is decisive:
+#     synthesize FIRST orphan only       -> HTTP 400
+#     synthesize all but LAST orphan     -> HTTP 400
+#     synthesize LAST orphan only        -> HTTP 200
+#     synthesize all orphans             -> HTTP 200
+#   Text must be NON-EMPTY: text "" -> 400, summary-only -> 400, one char / " " -> 200.
+#   Padding ANY existing item (all 89, first only, last only, real text, 1 char, no blob) -> 400,
+#   and dropping all reasoning items -> 400. The pad route cannot reach the failing turn.
+#   Control: same history with the gate OFF still 400s (pre-038 wire, item-for-item).
+#
+# Placement is load-bearing (do not "fix" this in preflight or by post-processing `items`):
+#   synthesizing into the wire list after conversion breaks function_call/function_call_output
+#   pairing -- measured: inserting before an orphan function_call -> 400 "No tool output found
+#   for tool call ..."; dropping the orphan call -> 400 "No tool call found for tool output ...".
+#   The synthesis therefore lives INSIDE _replay_reasoning_items, so the new item lands where
+#   every other replayed reasoning item does (emitted per turn, before that turn's items).
+#
+# After: two hunks, both in agent/codex_responses_adapter.py
+#   H1  _replay_reasoning_items: when require_reasoning_text_echo is set and the turn replayed
+#       no item, emit one synthetic
+#         {"type":"reasoning","content":[{"type":"reasoning_text","text":<text>}],"summary":[]}
+#       Text = the turn's own persisted reasoning_content (falls back to " " when blank, matching
+#       the chat wire's pad; V4 rejects "").
+#   H2  _preflight_encrypted: forward a reasoning item that carries content but no
+#       encrypted_content. Without this the synthetic item is silently dropped and the wire keeps
+#       missing the reasoning_text (symptom: "the code changed but the item count did not").
+#       Complements 037, which added content preservation to the HAS-blob branch; H2 adds the
+#       NO-blob branch.
+#
+# Runtime files only: agent/codex_responses_adapter.py
+#
+# Verified on this deployment (v0.22.2 d923a5eb tree with 037 applied):
+#   (a) patch -p1 applies clean, no fuzz, no .rej/.orig (applied to a hardlinked clone).
+#   (b) ruff/py_compile clean on the patched file.
+#   (c) End-to-end through the REAL converter + preflight against a hardlinked clone of the
+#       installed tree (/tmp/h038_full patched; /opt/hermes untouched -- checked by inode and
+#       md5), real failing history, gate ON:
+#         E0 module under test = /tmp/h038_full/agent/codex_responses_adapter.py
+#         E1 needs_reasoning_echo(custom, deepseek-v4.1-flash, relay) = True
+#         E2 history msgs=254 orphan turns=17
+#         E3 control gate=OFF items=473 reasoning=89  -> HTTP 400 reasoning_text
+#         E4 patched gate=ON  items=490 reasoning=106 -> HTTP 200 completed   (+17 = 17 orphans)
+#         E5 regression: short history, 131 orphans, items=574 -> HTTP 200 completed
+#       Request ids: E3 87e26875-18da-47ea-8b67-1bed913da6f0; E4/E5 completed.
+#   (d) Independent earlier confirmation, in-memory two-hunk patch on the same history:
+#       H1-last-only+H2 -> 200, H1-all+H2 -> 200, H2-only -> 400 (nothing to forward).
+#
+# Retire when: upstream ships an equivalent (synthesize the missing reasoning item for a turn
+#   with no persisted sidecar) AND that fix is an ancestor of the pinned base tag -- re-check by
+#   ancestry, not by #133799's state (still OPEN/DRAFT as of 2026-10-16). Re-anchor anchors:
+#   _replay_reasoning_items signature + trailing pad branch, _preflight_encrypted return paths,
+#   _capture_encrypted_item (the None-on-no-blob branch is the actual trigger).
+#
+diff --git a/agent/codex_responses_adapter.py b/agent/codex_responses_adapter.py
+--- a/agent/codex_responses_adapter.py
++++ b/agent/codex_responses_adapter.py
+@@ -505,6 +505,25 @@
+         replayed.append(replayed_item)
+         if item_id:
+             seen_item_ids.add(item_id)
++    if require_reasoning_text_echo and not replayed:
++        # hermes-office patch 038 / #133792: a turn whose reasoning sidecar was never persisted
++        # (``_capture_encrypted_item`` returns None without an ``encrypted_content`` blob — the relay
++        # only mints one when the request carries ``include: ["reasoning.encrypted_content"]``) replays
++        # ZERO reasoning items. In thinking mode the relay then rejects the whole continuation with
++        # HTTP 400 "The reasoning_text in the thinking mode must be passed back to the API", and the
++        # pad branch above never runs because there is no item to pad — the session is stuck forever.
++        # Synthesize the missing item from the turn's own persisted reasoning text. Text must be
++        # non-empty (V4 rejects ``""``); fall back to a single space, matching the chat path
++        # (``chat_completion_helpers`` sets ``reasoning_content`` to ``" "`` for the same reason).
++        reasoning_text = msg.get("reasoning_content")
++        if not isinstance(reasoning_text, str):
++            reasoning_text = msg.get("reasoning") if isinstance(msg.get("reasoning"), str) else ""
++        reasoning_text = reasoning_text.strip()
++        replayed.append({
++            "type": "reasoning",
++            "content": [{"type": "reasoning_text", "text": reasoning_text or " "}],
++            "summary": [],
++        })
+     return replayed
+ 
+ 
+@@ -874,6 +893,24 @@
+     """``reasoning`` / ``compaction`` items: opaque, issuer-sealed; forward only API-defined fields."""
+     encrypted = item.get("encrypted_content")
+     if not _nonempty_str(encrypted):
++        # hermes-office patch 038 / #133792: forward the synthetic text-only reasoning item minted by
++        # ``_replay_reasoning_items`` for a turn whose sidecar was never persisted. Returning None here
++        # silently drops it and the wire keeps missing the reasoning_text the relay demands, which
++        # shows up as "the code changed but the item count did not".
++        if item.get("type") == "reasoning":
++            content = item.get("content")
++            text_parts = [
++                {"type": "reasoning_text", "text": ctx.sanitize_text(part["text"])}
++                for part in (content if isinstance(content, list) else [])
++                if isinstance(part, dict) and part.get("type") == "reasoning_text"
++                and isinstance(part.get("text"), str) and part["text"]
++            ]
++            if text_parts:
++                return {
++                    "type": "reasoning",
++                    "content": text_parts,
++                    "summary": _as_list(item.get("summary")),
++                }
+         return None
+     if item["type"] == "compaction":
+         return {"type": "compaction", "encrypted_content": encrypted}
