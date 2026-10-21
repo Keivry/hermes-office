@@ -1,45 +1,52 @@
-# Base tag: v0.22.2 is the release v0.22.1 was meant to be -- 0.22.1 was built from the wrong
-# commit and shipped unreleased gateway work. Both publish a REAL bare Docker tag.
-# `nousresearch/hermes-agent:v0.22.2` multi-arch index digest
-# sha256:36099926da316742423544e055d4734777105ffe6341873af5459b957d0c2919 (read back from
+# Base tag: v0.22.4 (2026-10-21) -- a patch release rolling 13 PRs / 14 non-merge commits over
+# v0.22.3, which is itself the stable rollup of ~620 PRs since v0.22.2 (2,911 non-merge
+# commits, 4,206 files, +360,278/-64,308, 326 issues closed). Upstream deferred the curated
+# notes for the whole v0.22.0->v0.22.4 window to v0.23.0 ("undocumented here on purpose"), so
+# the drift check further down -- not the release text -- is what gates this bump.
+# v0.22.3 was skipped deliberately: v0.22.4 shipped ~6h later with the Desktop suggestion-pill
+# removal and the plugin-install consent fix, and tags both builds identically otherwise.
+# `nousresearch/hermes-agent:v0.22.4` multi-arch index digest
+# sha256:7a69201726bc64db2072a1371557137c23312d29705cda2b8ea2a0214a50a4cf (read back from
 # the registry), so this pin and the promoted release image cannot drift apart.
 #
-# The tag is annotated (object 7b77e29e) and its own message records the release it was cut
-# from: claimTag rc.2-v0.22.2, commit d923a5eb, dockerManifestDigest sha256:36099926... --
+# The tag is annotated (object 64dbae64) and its own message records the release it was cut
+# from: claimTag rc.2-v0.22.4, commit 4d04303818b, dockerManifestDigest sha256:7a692017... --
 # the same digest as the index above, which is the cheapest way to re-verify a bump.
 #
 # Base runtime, read from pm/lock.json of the tagged tree: python 3.14.7, node v26.7.0,
-# npm 12.0.2, uv 0.12.3 -- identical to v0.22.1, so no npm/pip/uv flag in this Dockerfile
-# needed re-checking for the bump. The base Dockerfile is byte-identical between v0.22.1 and
-# v0.22.2 (543 lines, zero diff), and SQLITE_AUTOCONF_VERSION is still 3530400 in both, so the
-# sqlite CLI pin below is untouched. The 300-file v0.22.1->v0.22.2 delta is all under the
-# base image's own paths (gateway boot epoch, local-model streaming, profiles, Windows
-# packaging, catalog) plus release plumbing.
+# npm 12.0.2, uv 0.12.3 -- identical to v0.22.2, so no npm/pip/uv flag in this Dockerfile
+# needed re-checking for the bump. The base Dockerfile is byte-identical between v0.22.2 and
+# v0.22.4 (32,542 bytes, zero diff), and SQLITE_AUTOCONF_VERSION is still 3530400, so the
+# sqlite CLI pin below is untouched. Everything in the v0.22.2->v0.22.4 delta sits under the
+# base image's own paths (Desktop + Microsoft Store packaging, plugin install consent, WhatsApp
+# re-pairing, dashboard + approval chip, release lanes, plugin catalog) -- none of it touches a
+# file this roster patches, which the per-hunk fuzz-0 apply below confirms line by line.
 #
 # Known upstream issue carried by this base: "Sessions that ran under the 0.22.1 gateway
-# can't be deleted in 0.22.2" (release notes). This deployment ran v0.22.1 from 2026-10-14, so
-# pre-existing sessions in state.db may fail to delete until upstream addresses it.
+# can't be deleted in 0.22.2" (still listed on v0.22.2, not retracted in the 0.22.3/0.22.4
+# notes). This deployment ran v0.22.1 from 2026-10-14, so pre-existing sessions in state.db may
+# fail to delete until upstream says otherwise.
 
-ARG HERMES_AGENT_VERSION=v0.22.2
+ARG HERMES_AGENT_VERSION=v0.22.4
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.157
+ARG OFFICECLI_VERSION=v1.0.158
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
-ARG PPT_MASTER_VERSION=v6.7.0
+ARG PPT_MASTER_VERSION=v6.7.2
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.139.0
+ARG DOCLING_VERSION=2.141.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=331fa474e26e428e2e6af1143b2fdab19cee492d7d21897b8899ce1c14755662
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.29.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=7b27accfa545169ad070efb8a6679b25d63acc8513bbc0c05937c3ce94c13ea5
-ARG PDFCPU_VERSION=0.16.2
+ARG PDFCPU_VERSION=0.16.3
 ARG PDFCPU_ASSET_URL=https://github.com/pdfcpu/pdfcpu/releases/download/v${PDFCPU_VERSION}/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64.tar.xz
 ARG BUN_VERSION=1.4.3
 ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
-ARG CLAWMEM_VERSION=0.43.3
+ARG CLAWMEM_VERSION=0.43.5
 # RTK ships two editions from the same tag: `rtk-<target>` (Apache-2.0 CLI linking the
 # BUSL-1.1 `rtk-engine`) and `rtk-oss-<target>` (Apache-2.0 only). This image takes the
 # oss edition: v1.0.0 split the compression engine out under BUSL-1.1 (source-available,
@@ -53,8 +60,8 @@ ARG CLAWMEM_VERSION=0.43.3
 ARG RTK_VERSION=v1.0.1
 ARG RTK_ASSET=rtk-oss-x86_64-unknown-linux-musl.tar.gz
 ARG RTK_ASSET_SHA256=a44e8ffc43981100b4ddf1710399a1649a6c874591aa6d0c0727fe6cbd983c41
-ARG GH_VERSION=v2.102.0
-ARG GH_ASSET=gh_2.102.0_linux_amd64.tar.gz
+ARG GH_VERSION=v2.103.0
+ARG GH_ASSET=gh_2.103.0_linux_amd64.tar.gz
 ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH_ASSET}
 # Official sqlite3 CLI matching the base image's bundled libsqlite3 3.53.4 in
 # /usr/local/lib. Debian's /usr/bin/sqlite3 (compiled against 3.46.1) resolves
@@ -160,8 +167,8 @@ RUN curl -fsSL "${SQLITE_ASSET_URL}" -o /tmp/sqlite-tools.zip \
     && rm -rf /tmp/sqlite-tools.zip /tmp/sqlite-tools \
     && sqlite3 --version
 
-# npm 12 (the base's pinned npm -- 12.0.2 in v0.21.6, v0.21.7, v0.22.0 AND v0.22.1, checked in
-# pm/lock.json) removed --unsafe-perm and now hard-errors on
+# npm 12 (the base's pinned npm -- 12.0.2 in v0.21.6, v0.21.7, v0.22.0, v0.22.1, v0.22.2,
+# v0.22.3 AND v0.22.4, checked in pm/lock.json) removed --unsafe-perm and now hard-errors on
 # unknown CLI flags (EUNKNOWNCONFIG) instead of ignoring them. It was never
 # needed here anyway: npm >= 7 runs lifecycle scripts as root by default, and
 # clawmem ships no install/postinstall script of its own.
@@ -243,6 +250,9 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # exist, while a turn whose reasoning sidecar was never persisted replays ZERO items and had
 # nothing to pad. BOTH stay -- 037 treats the all-turns-have-sidecars session shape, 038 the
 # orphan-turn shape. See its own block near the end of this header.
+# As of v0.22.4 (2026-10-22) the roster is 12 patches: that bump RETIRED NOTHING and
+# RE-ANCHORED NOTHING -- every patch still applies at fuzz 0 to both the tag and upstream main.
+# See the v0.22.4 sweep block near the end of this header for the per-patch evidence.
 # `ls patches/*.patch | wc -l` is the truth, not this paragraph: it read 7 through the
 # v2026.9.24 sweep while the disk held 9, and 10 while the disk held 11. Reconcile it
 # against the disk every sweep before trusting any count here.
@@ -644,6 +654,69 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   11/11 marker greps PASS, ruff check clean on 037's two files before and after, and
 #   check_structure.py STRUCTURE OK on both. 037 additionally carries a behaviour-level RED->GREEN
 #   through the real transport call path plus an end-to-end replay of the real failing history.
+#
+# 2026-10-22 sweep (v0.22.2 -> v0.22.4; tag objects 5b147ab for 0.22.3 and 4d04303 for 0.22.4,
+#   docker index digest sha256:7a692017...): roster stays at 12. ZERO RETIRE, ZERO RE-ANCHOR --
+#   offset-only drift on 9 of the 12 patches and the other 3 landed exactly where they were
+#   written. Drift was checked, not assumed, on TWO trees:
+#   (a) the tag: all 12 x `patch -p1` in lexicographic order on a pristine v0.22.4 checkout ->
+#       rc=0 on every patch, fuzz=0, zero .rej/.orig, and NO patch emitted "Reversed (or
+#       previously applied)" -- which is the retirement signal, and it never fired. Offsets were
+#       zero except 018 (+175 in agent/chat_completion_helpers.py, +32 in auxiliary_client.py),
+#       014 (+69), 011 (+27), 032 (+20), 036 (+17), 008 (+15), 037 (+12), 015 (+2): pure
+#       line-number drift inside the same hunks, i.e. the base moved, not our anchors.
+#   (b) upstream main (default-branch tarball, same date): all 12 x rc=0 at fuzz 0 TOO. A fix
+#       that merges upstream lands on main first and would surface here as a reversal or a
+#       rejected hunk. Neither happened, so NO survivor's fix is upstream -- not even outside
+#       the tag, which matters because v0.22.3/0.22.4 ship no curated notes to read.
+#   Both trees: all 16 touched files py_compile clean, and `ruff check --config ruff.toml` on
+#   those 16 returns "All checks passed!" on the PRISTINE tree as well as the patched one
+#   (identical output before and after -- no lint debt introduced). 12/12 marker greps are
+#   present in the patched tree and EMPTY in the pristine one (the single exception, `kept_tools`,
+#   only matches an upstream test file that already used the name; the patch's own code is not
+#   there). That is the per-patch "the flagged bug is still present" check: title_generator.py:523
+#   still sends extra_body={"response_format": _TITLE_RESPONSE_FORMAT} unconditionally; no
+#   active_turn_owner_alive in gateway/run_startup.py; no node-compile-cache/ in
+#   checkpoint_manager.DEFAULT_EXCLUDES; _repair_bare_repo_dirs still absent; no
+#   _is_opencode_custom_name; no _skill_diff_char_budget against the flat 3000-char cap; no
+#   set_reaction_handler call in the Matrix adapter and no _matrix_command_message_type.
+#
+#   Upstream-coverage check per patch on this bump (all re-queried 2026-10-22):
+#   #85207 still OPEN -> 011 stays. Note the 0.22.3/0.22.4 gateway work fixed HOST-LOCK
+#   liveness (boot epoch, recycled-PID rejection, read-only record checks) -- a different layer
+#   from 011's mid-turn restart exclusivity, and no ancestry flip on the issue.
+#   #85713 -- 014's own named retirement condition ("keep until #85713 merges upstream") -- is
+#   now CLOSED **WITHOUT MERGING**: merged=false, merge_commit_sha=null, head 900ffbda0 diverged
+#   from v0.22.4 (ahead 2 / behind 35,620). 014 therefore STAYS, but its condition can no longer
+#   be satisfied by that PR: it is no longer a "wait for the merge" patch but a vendor deviation
+#   to re-decide on its own merits. Re-checked at code level: the unconditional
+#   response_format is still in the shipped tag, so it still costs one rejected round trip per
+#   fresh session (no longer a hard failure -- upstream's _is_structured_output_rejection retry
+#   ladder absorbs it).
+#   #78888 / #65349 / #83036 all still OPEN -> 015/016 stay.
+#   #57315, #46310, #82816, #105841 were already CLOSED (2026-07-05, 2026-06-28, 2026-08-19,
+#   2026-09-19) long before this roster cited them, as context references rather than open
+#   blockers; no state change, and their fixes never landed on the anchors our patches use
+#   (markers still empty in the pristine tree).
+#   #133799 still OPEN/DRAFT + #133792 still OPEN -> 037/038 stay. #138895/#138896 are CLOSED but
+#   that fix (Mattermost empty media lists) never touched the Matrix adapter's bare-prefix
+#   stamping -> 036 stays.
+#
+#   ClawMem roster (separate glob, applied against the installed npm package root): the packed
+#   clawmem@0.43.5 tarball still ships src/limits.ts, src/llm.ts and src/splitter.ts, and
+#   patches/clawmem/036 dry-runs clean against it (hunks land at +8 / +17); src/hermes/ still
+#   carries plugin.yaml, so the plugin-staging step is unaffected by the 0.43.3 -> 0.43.5 bump.
+#
+#   Component pins bumped in the same commit (checked against the registries, not the docs):
+#   officecli v1.0.157 -> v1.0.158; ppt-master v6.7.0 -> v6.7.2 (requirements.txt is
+#   byte-identical between the two tags, so the venv layer's dependency set does not change);
+#   docling 2.139.0 -> 2.141.0 (docling-slim[standard] wants torch<3,>=2.2.2 and torchvision<1,
+#   so the 2.14.1+cpu / 0.29.1+cpu wheels stay -- 2.14.1 is still the newest cp313 CPU wheel
+#   published); pdfcpu 0.16.2 -> 0.16.3 (SECURITY: GHSA-jp42-qm45-2x6g -- decoded-byte limit
+#   bypass plus local image access in create/form input); clawmem 0.43.3 -> 0.43.5; gh v2.102.0
+#   -> v2.103.0. UNCHANGED on purpose: bun 1.4.3 and rtk v1.0.1 are still the latest releases,
+#   and the sqlite CLI pin stays at 3530400 because SQLITE_AUTOCONF_VERSION is still 3530400 in
+#   the base.
 #
 # Previous sweeps:
 # v0.22.0 / e06df9c2 (2026-10-14): roster stayed at 10, zero retire / zero re-anchor. See the

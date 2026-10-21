@@ -22,14 +22,14 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.157`
+- Current pinned version in `Dockerfile`: `v1.0.158`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
 - `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
-- Current pinned version in `Dockerfile`: `v6.7.0`
+- Current pinned version in `Dockerfile`: `v6.7.2`
 
 ### ImageMagick
 - Installed from the distro package as `imagemagick`
@@ -38,18 +38,19 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.139.0`
+- Current pinned version in `Dockerfile`: `2.141.0`
 - Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.14.1+cpu` and `torchvision==0.29.1+cpu`
-  2. install `docling==2.139.0` from the normal Python package index
+  2. install `docling==2.141.0` from the normal Python package index
 - The upstream Hermes base image keeps `[tool.uv] exclude-newer = "14 days"` in `/opt/hermes/pyproject.toml`; the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs
 - Since base `v0.21.6` the base image deliberately keeps `uv` off `PATH` (its PM store resolves the pinned binary for dependency preparation only); the Dockerfile re-exposes that same binary via a `/usr/local/bin/uv` symlink for the build and drops the shim once the tool venvs are assembled, so the published image ships no installer on `PATH`
 - Current image installs the base `docling` package (not the optional VLM extras)
 
 ### pdfcpu
 - Installed as a standalone binary at `/usr/local/bin/pdfcpu`
-- Current pinned version in `Dockerfile`: `0.16.2`
+- Current pinned version in `Dockerfile`: `0.16.3`
 - Best suited for open-source PDF CLI operations such as merge, split, validate, optimize, watermark, rotate, forms, and image extraction
+- 0.16.3 is a security release (`GHSA-jp42-qm45-2x6g`): decoded-byte limit bypasses plus local image access in `create` / form input
 
 ### qpdf
 - Installed from the distro package as `qpdf`
@@ -66,7 +67,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 
 ### ClawMem
 - Installed globally as `clawmem` at `/usr/local/bin/clawmem` (installed with npm `--prefix /usr/local`; the base image resolves `node` out of its own PM store, so npm's implicit global prefix no longer points at `/usr/local`)
-- Current pinned version in `Dockerfile`: `0.43.3`
+- Current pinned version in `Dockerfile`: `0.43.5`
 - The Hermes memory provider plugin is staged under `/opt/tools/clawmem-plugin`
 - On container start, the s6 cont-init.d hook syncs that plugin into `$HERMES_HOME/plugins/clawmem`
 - The image defaults to **external-model / remote-GPU** style operation:
