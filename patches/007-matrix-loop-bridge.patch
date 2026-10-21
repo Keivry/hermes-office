@@ -1,7 +1,7 @@
 diff --git a/tools/send_message_senders.py b/tools/send_message_senders.py
 --- a/tools/send_message_senders.py
 +++ b/tools/send_message_senders.py
-@@ -22,6 +22,11 @@ _CAPTIONABLE_EXTS = _IMAGE_EXTS | _VIDEO_EXTS | {".pdf", ".doc", ".docx", ".txt"
+@@ -23,6 +23,11 @@
  _TELEGRAM_CAPTION_LIMIT = 1024
  _DEFAULT_CAPTION_LIMIT = 4096
  
@@ -13,8 +13,8 @@ diff --git a/tools/send_message_senders.py b/tools/send_message_senders.py
  
  def _media_caption_split(text, media_files, *, max_caption_len):
      """Single chokepoint deciding whether text rides on the media bubble as its caption:
-@@ -496,6 +501,86 @@ async def _send_signal(extra, chat_id, message, media_files=None):
-         return _error(f"Signal send failed: {e}")
+@@ -408,6 +413,86 @@
+         return None, _error(f"Slack DM resolution failed: {e}")
  
  
 +def _matrix_adapter_loop_matches(adapter) -> bool:
@@ -100,7 +100,7 @@ diff --git a/tools/send_message_senders.py b/tools/send_message_senders.py
  # "ephemeral connect (may re-init E2EE per send, see #46310)",
  async def _send_matrix_via_adapter(pconfig, chat_id, message, media_files=None, thread_id=None):
      """Matrix adapter send (native media preserved). Prefer the live gateway adapter's persistent
-@@ -514,7 +599,16 @@ async def _send_matrix_via_adapter(pconfig, chat_id, message, media_files=None,
+@@ -426,7 +511,16 @@
          "ephemeral connect (may re-init E2EE per send)"))
      if live_adapter is not None:
          # Owned by the gateway — must NOT be disconnected (return before the ephemeral ``finally``).

@@ -251,7 +251,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # nothing to pad. BOTH stay -- 037 treats the all-turns-have-sidecars session shape, 038 the
 # orphan-turn shape. See its own block near the end of this header.
 # As of v0.22.4 (2026-10-22) the roster is 12 patches: that bump RETIRED NOTHING and
-# RE-ANCHORED NOTHING -- every patch still applies at fuzz 0 to both the tag and upstream main.
+# RE-ANCHORED ONE (007 -- its leading context referenced code upstream moved out of the module).
 # See the v0.22.4 sweep block near the end of this header for the per-patch evidence.
 # `ls patches/*.patch | wc -l` is the truth, not this paragraph: it read 7 through the
 # v2026.9.24 sweep while the disk held 9, and 10 while the disk held 11. Reconcile it
@@ -656,19 +656,36 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   through the real transport call path plus an end-to-end replay of the real failing history.
 #
 # 2026-10-22 sweep (v0.22.2 -> v0.22.4; tag objects 5b147ab for 0.22.3 and 4d04303 for 0.22.4,
-#   docker index digest sha256:7a692017...): roster stays at 12. ZERO RETIRE, ZERO RE-ANCHOR --
-#   offset-only drift on 9 of the 12 patches and the other 3 landed exactly where they were
-#   written. Drift was checked, not assumed, on TWO trees:
+#   docker index digest sha256:7a692017...): roster stays at 12. ZERO RETIRE, ONE RE-ANCHOR
+#   (007, below) -- offset-only drift on the other 8 that moved, and 3 landed exactly where they
+#   were written. Drift was checked, not assumed, on TWO trees:
 #   (a) the tag: all 12 x `patch -p1` in lexicographic order on a pristine v0.22.4 checkout ->
-#       rc=0 on every patch, fuzz=0, zero .rej/.orig, and NO patch emitted "Reversed (or
-#       previously applied)" -- which is the retirement signal, and it never fired. Offsets were
+#       rc=0 on every patch, zero .rej/.orig, and NO patch emitted "Reversed (or previously
+#       applied)" -- which is the retirement signal, and it never fired. Offsets were
 #       zero except 018 (+175 in agent/chat_completion_helpers.py, +32 in auxiliary_client.py),
-#       014 (+69), 011 (+27), 032 (+20), 036 (+17), 008 (+15), 037 (+12), 015 (+2): pure
-#       line-number drift inside the same hunks, i.e. the base moved, not our anchors.
-#   (b) upstream main (default-branch tarball, same date): all 12 x rc=0 at fuzz 0 TOO. A fix
+#       014 (+69), 011 (+27), 032 (+20), 036 (+17), 008 (+15), 037 (+12), 015 (+2) and 007 (-88):
+#       pure line-number drift inside the same hunks, i.e. the base moved, not our anchors.
+#   (b) upstream main (default-branch tarball, same date): same result -- all 12 x rc=0. A fix
 #       that merges upstream lands on main first and would surface here as a reversal or a
 #       rejected hunk. Neither happened, so NO survivor's fix is upstream -- not even outside
 #       the tag, which matters because v0.22.3/0.22.4 ship no curated notes to read.
+#
+#   007 RE-ANCHORED (the only patch that needed touching). On the first pass it applied rc=0 but
+#   GNU patch reported "Hunk #2 succeeded at 413 with fuzz 1": hunk #2's LEADING context was
+#   `return _error(f"Signal send failed: {e}")` from `_send_signal`, and between v0.22.2 and
+#   v0.22.4 upstream moved that whole sender out of tools/send_message_senders.py into
+#   plugins/platforms/signal/standalone.py -- `_send_signal` and the string "Signal send failed"
+#   are gone from the module (grep: 0 hits; 1 hit in the new plugin file). The hunk still landed
+#   in the right place (trailing anchor `# "ephemeral connect ..."` + `_send_matrix_via_adapter`
+#   matched), which is why fuzz is a warning and not a failure -- but a fuzz-1 landing is silent
+#   drift, so the patch was re-anchored: hunk #2's leading context is now the `_resolve_slack_dm`
+#   tail, and the regenerated patch (diff of pristine v0.22.4 vs the applied tree) applies at
+#   fuzz 0 with rc=0 and produces a byte-identical file (md5 ca7a89a0a85ab167f937071964938681,
+#   the same bytes the fuzz-1 landing produced -- the re-anchor changes the anchor, not the code).
+#   This is also the first time this roster's own fuzz column was re-measured with a grep that
+#   cannot swallow "with fuzz N": the earlier claim of an all-fuzz-0 sweep came from a regex that
+#   matched the offset clause and dropped the fuzz clause. Trust `grep -oE "with fuzz [0-9]+"`.
+#
 #   Both trees: all 16 touched files py_compile clean, and `ruff check --config ruff.toml` on
 #   those 16 returns "All checks passed!" on the PRISTINE tree as well as the patched one
 #   (identical output before and after -- no lint debt introduced). 12/12 marker greps are
