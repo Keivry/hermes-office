@@ -22,14 +22,14 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### OfficeCLI
 - Installed as a standalone binary at `/usr/local/bin/officecli`
 - Available directly on `PATH`
-- Current pinned version in `Dockerfile`: `v1.0.158`
+- Current pinned version in `Dockerfile`: `v1.0.160`
 
 ### PPT Master
 - Extracted to `/opt/tools/ppt-master`
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
 - `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
-- Current pinned version in `Dockerfile`: `v6.7.3`
+- Current pinned version in `Dockerfile`: `v6.8.0`
 
 ### ImageMagick
 - Installed from the distro package as `imagemagick`
@@ -38,19 +38,19 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.142.0`
+- Current pinned version in `Dockerfile`: `2.146.0`
 - Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.14.1+cpu` and `torchvision==0.29.1+cpu`
-  2. install `docling==2.142.0` from the normal Python package index
-- The upstream Hermes base image keeps `[tool.uv] exclude-newer = "14 days"` in `/opt/hermes/pyproject.toml`; the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs
+  2. install `docling==2.146.0` from the normal Python package index
+- The upstream Hermes base image sets `[tool.uv] exclude-newer` in `/opt/hermes/pyproject.toml` (3 days as of `v0.22.7`); the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs (docling `2.146.0` was uploaded 1 day before this bump, so the bypass is what makes the pin installable)
 - Since base `v0.21.6` the base image deliberately keeps `uv` off `PATH` (its PM store resolves the pinned binary for dependency preparation only); the Dockerfile re-exposes that same binary via a `/usr/local/bin/uv` symlink for the build and drops the shim once the tool venvs are assembled, so the published image ships no installer on `PATH`
 - Current image installs the base `docling` package (not the optional VLM extras)
 
 ### pdfcpu
 - Installed as a standalone binary at `/usr/local/bin/pdfcpu`
-- Current pinned version in `Dockerfile`: `0.16.3`
+- Current pinned version in `Dockerfile`: `0.16.4`
 - Best suited for open-source PDF CLI operations such as merge, split, validate, optimize, watermark, rotate, forms, and image extraction
-- 0.16.3 is a security release (`GHSA-jp42-qm45-2x6g`): decoded-byte limit bypasses plus local image access in `create` / form input
+- 0.16.4 is a security release (`GHSA-2623-w998-vcr4`): unbounded object traversal could exhaust the stack / terminate the process on crafted PDFs (supersedes 0.16.3's `GHSA-jp42-qm45-2x6g` decoded-byte-limit bypass)
 
 ### qpdf
 - Installed from the distro package as `qpdf`
@@ -210,7 +210,7 @@ If another service already owns `9089` (for example Qwen3.5), either move that s
 
 ### What's in this image
 
-- **RTK binary** at `/usr/local/bin/rtk` — pinned to `v1.0.1`, **oss edition** (`rtk-oss-x86_64-unknown-linux-musl.tar.gz`, pure Apache-2.0, musl static binary, SHA256-verified at build). Since v1.0.0 upstream ships two editions from one tag: `rtk-<target>` links the BUSL-1.1 `rtk-engine` (source-available; Change Date 2030-09-09 → Apache-2.0), while `rtk-oss-<target>` is Apache-2.0 only. This image takes the oss edition because rtk-hermes only ever calls `rtk rewrite`: the rewrite verdict, every command filter and `rtk gain` live in the Apache half, and the two editions were measured byte-for-byte equivalent for our usage (6/6 rewrite verdicts and the `ls`/`git` compressed output identical). Nothing here uses the engine-only pipeline/plugin surface.
+- **RTK binary** at `/usr/local/bin/rtk` — pinned to `v1.1.0`, **oss edition** (`rtk-oss-x86_64-unknown-linux-musl.tar.gz`, pure Apache-2.0, musl static binary, SHA256-verified at build). Since v1.0.0 upstream ships two editions from one tag: `rtk-<target>` links the BUSL-1.1 `rtk-engine` (source-available; Change Date 2030-09-09 → Apache-2.0), while `rtk-oss-<target>` is Apache-2.0 only. This image takes the oss edition because rtk-hermes only ever calls `rtk rewrite`: the rewrite verdict, every command filter and `rtk gain` live in the Apache half, and the two editions were measured byte-for-byte equivalent for our usage (6/6 rewrite verdicts and the `ls`/`git` compressed output identical; re-verified on the v1.1.0 bump against the v1.0.1 binary). Nothing here uses the engine-only pipeline/plugin surface.
 - **rtk-hermes plugin** (`ogallotti/rtk-hermes` v1.2.3) — installed into Hermes' Python venv and auto-enabled in `config.yaml` via the s6 cont-init.d hook
 
 The Hermes plugin automatically rewrites terminal commands through `rtk` *before* execution, so the agent gets token-compressed output without any manual `rtk` prefix needed.

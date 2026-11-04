@@ -38,6 +38,13 @@
 #
 # Runtime files only: agent/codex_responses_adapter.py, agent/transports/codex.py
 #
+# v0.22.7 re-anchor (2026-11-04): upstream turned the codex.py import into a multi-line block
+#   that also imports responses_endpoint_quirks, so this patch's one-line import anchor stopped
+#   matching (hunk 1 FAILED, the other 7 hunks applied). The import is re-anchored AFTER that
+#   block; the re-derived diff below also carries full context for the two hunks that had only
+#   applied with fuzz 1 on the old anchors. Zero semantic change; verified 12/12 markers,
+#   py_compile, ruff and check_structure on a pristine v0.22.7 tree.
+#
 # Verified on a pristine v0.22.2 tree (d923a5eb):
 #   (a) patch -p1 --dry-run -> rc=0, hunks land at v0.22.2 line numbers (offset +59/+60,
 #       +43), no fuzz, no .rej/.orig; reverses cleanly (rc=0).
@@ -70,9 +77,10 @@
 #   ResponsesApiTransport.convert_messages, _native_responses_replay_items.
 #
 diff --git a/agent/codex_responses_adapter.py b/agent/codex_responses_adapter.py
+index 9c683e7..18e37fe 100644
 --- a/agent/codex_responses_adapter.py
 +++ b/agent/codex_responses_adapter.py
-@@ -467,6 +467,7 @@ def _assistant_message_item(
+@@ -504,6 +504,7 @@ def _assistant_message_item(
  def _replay_reasoning_items(
      msg: dict[str, Any], *, seen_item_ids: set, current_issuer_kind: Optional[str],
      current_issuer_model: Optional[str] = None, native_compaction_eligible: bool,
@@ -80,7 +88,7 @@ diff --git a/agent/codex_responses_adapter.py b/agent/codex_responses_adapter.py
  ) -> list[dict[str, Any]]:
      """Replay persisted encrypted reasoning/compaction items for one assistant turn. Skips duplicate
      ids, ``compaction`` checkpoints unless THIS request carries ``context_management`` (else a persisted
-@@ -498,7 +499,10 @@ def _replay_reasoning_items(
+@@ -535,7 +536,10 @@ def _replay_reasoning_items(
                  )
                  _CROSS_ISSUER_WARN_EMITTED = True
              continue
@@ -92,15 +100,15 @@ diff --git a/agent/codex_responses_adapter.py b/agent/codex_responses_adapter.py
          if item_id:
              seen_item_ids.add(item_id)
      return replayed
-@@ -612,6 +616,7 @@ def _chat_messages_to_responses_input(
-     messages: list[dict[str, Any]], *, is_xai_responses: bool = False, is_github_responses: bool = False,
+@@ -649,6 +653,7 @@ def _chat_messages_to_responses_input(
+     messages: list[dict[str, Any]], *, is_xai_responses: bool = False, drop_replay_item_ids: bool = False,
      replay_encrypted_reasoning: bool = True, current_issuer_kind: Optional[str] = None,
      current_issuer_model: Optional[str] = None, native_compaction_eligible: bool = False,
 +    require_reasoning_text_echo: bool = False,
  ) -> list[dict[str, Any]]:
      """Convert internal chat-style messages to Responses input items.
  
-@@ -691,6 +696,7 @@ def _chat_messages_to_responses_input(
+@@ -727,6 +732,7 @@ def _chat_messages_to_responses_input(
          reasoning_items = [] if not replay_encrypted_reasoning else _replay_reasoning_items(
              msg, seen_item_ids=seen_item_ids, current_issuer_kind=current_issuer_kind,
              current_issuer_model=current_issuer_model, native_compaction_eligible=native_compaction_eligible,
@@ -108,15 +116,15 @@ diff --git a/agent/codex_responses_adapter.py b/agent/codex_responses_adapter.py
          )
          emit(reasoning_items, msg)
          message_items = _replay_message_items(
-@@ -772,6 +778,7 @@ def _native_responses_replay_items(
+@@ -808,6 +814,7 @@ def _native_responses_replay_items(
          return None
      # The wire model may be rewritten per request (fast mode); provenance must match what the transport stamps.
      effective_model = effective_request_overrides(agent).get("model", getattr(agent, "model", None))
 +    from agent.message_sanitization import needs_reasoning_echo
      try:
          items = _chat_messages_to_responses_input(
-             messages, is_xai_responses=route["is_xai_responses"], is_github_responses=route["is_github_responses"],
-@@ -779,6 +786,11 @@ def _native_responses_replay_items(
+             messages, is_xai_responses=route["is_xai_responses"],
+@@ -816,6 +823,11 @@ def _native_responses_replay_items(
              current_issuer_kind=_classify_responses_issuer(base_url=getattr(agent, "base_url", None), **route),
              current_issuer_model=_wire_model_identity(effective_model),
              native_compaction_eligible=True,
@@ -128,7 +136,7 @@ diff --git a/agent/codex_responses_adapter.py b/agent/codex_responses_adapter.py
          )
      except Exception:
          logger.debug(
-@@ -872,10 +884,21 @@ def _preflight_encrypted(item: dict[str, Any], idx: int, ctx: _PreflightCtx) ->
+@@ -909,10 +921,21 @@ def _preflight_encrypted(item: dict[str, Any], idx: int, ctx: _PreflightCtx) ->
              return None
          ctx.seen_ids.add(item_id)
      summary = _as_list(item.get("summary"))
@@ -152,18 +160,19 @@ diff --git a/agent/codex_responses_adapter.py b/agent/codex_responses_adapter.py
  
  def _preflight_message(item: dict[str, Any], idx: int, ctx: _PreflightCtx) -> dict[str, Any]:
 diff --git a/agent/transports/codex.py b/agent/transports/codex.py
+index 7925021..f56be84 100644
 --- a/agent/transports/codex.py
 +++ b/agent/transports/codex.py
-@@ -684,6 +684,7 @@ class ResponsesApiTransport(ProviderTransport):
-     def convert_messages(self, messages: list[dict[str, Any]], **kwargs) -> Any:
-         """Convert OpenAI chat messages to Responses API input items."""
-         from agent.codex_responses_adapter import _chat_messages_to_responses_input, _wire_model_identity
+@@ -696,6 +696,7 @@ class ResponsesApiTransport(ProviderTransport):
+         from agent.codex_responses_adapter import (
+             _chat_messages_to_responses_input, _wire_model_identity, responses_endpoint_quirks,
+         )
 +        from agent.message_sanitization import needs_reasoning_echo
  
          self._last_issuer_model = _wire_model_identity(kwargs.get("model"))
-         return _chat_messages_to_responses_input(
-@@ -693,6 +694,12 @@ class ResponsesApiTransport(ProviderTransport):
-             current_issuer_kind=self._resolve_issuer_kind(kwargs),
+         endpoint = kwargs.get("endpoint") or responses_endpoint_quirks(kwargs.get("base_url"))
+@@ -706,6 +707,12 @@ class ResponsesApiTransport(ProviderTransport):
+             current_issuer_kind=self._resolve_issuer_kind(kwargs, endpoint),
              current_issuer_model=self._last_issuer_model,
              native_compaction_eligible=_native_compaction_active(kwargs.get("context_management")),
 +            # hermes-office: pass provider + model, not just base_url. The must-echo table keys

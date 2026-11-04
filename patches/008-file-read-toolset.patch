@@ -1,9 +1,10 @@
 diff --git a/hermes_cli/setup_quick.py b/hermes_cli/setup_quick.py
+index 0cb0170..ed6cc01 100644
 --- a/hermes_cli/setup_quick.py
 +++ b/hermes_cli/setup_quick.py
-@@ -178,7 +178,21 @@ def _blank_slate_minimal_toolsets(config: dict):
-             # here causes model_tools to subtract their tools (terminal, read_file, …) from the minimal
-             # Blank Slate surface (#57315).
+@@ -233,7 +233,21 @@ def _blank_slate_minimal_toolsets(config: dict):
+                 if tools and any(tools <= cts for cts in configurable_tool_sets):
+                     continue  # subset of a checklist toolset — the superset's entry already covers it (#134593)
              all_keys.add(k)
 -        disabled = sorted(all_keys - keep)
 +        disabled = all_keys - keep
@@ -25,9 +26,10 @@ diff --git a/hermes_cli/setup_quick.py b/hermes_cli/setup_quick.py
              config.setdefault("agent", {})["disabled_toolsets"] = disabled
      except Exception as exc:
 diff --git a/hermes_cli/tools_config.py b/hermes_cli/tools_config.py
+index 0370a4b..79cf6b7 100644
 --- a/hermes_cli/tools_config.py
 +++ b/hermes_cli/tools_config.py
-@@ -54,6 +54,7 @@ CONFIGURABLE_TOOLSETS = [
+@@ -69,6 +69,7 @@ CONFIGURABLE_TOOLSETS = [
      ("browser",         "🌐 Browser Automation",       "navigate, click, type, scroll"),
      ("terminal",        "💻 Terminal & Processes",      "terminal, process"),
      ("file",            "📁 File Operations",           "read, write, patch, search"),
@@ -36,9 +38,10 @@ diff --git a/hermes_cli/tools_config.py b/hermes_cli/tools_config.py
      ("vision",          "👁️  Vision / Image Analysis",  "vision_analyze"),
      ("video",           "🎬 Video Analysis",            "video_analyze (requires video-capable model)"),
 diff --git a/toolsets.py b/toolsets.py
+index 6b235a2..d1d7dcb 100644
 --- a/toolsets.py
 +++ b/toolsets.py
-@@ -122,6 +122,11 @@ TOOLSETS = {
+@@ -121,6 +121,11 @@ TOOLSETS = {
          "search (content + files)",
          ["read_file", "write_file", "patch", "search_files"],
      ),
