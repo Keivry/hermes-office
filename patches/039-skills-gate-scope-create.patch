@@ -1,0 +1,218 @@
+# 039-skills-gate-scope-create.patch
+#
+# Local patch -- NOT an upstream PR. Checked 2026-11-04 against upstream main and v0.22.7: the
+# skills gate is still a single boolean, so "review new skills but let edits through" is not
+# expressible. Nothing upstream tracks it; the nearest issues are about the queue being fed by
+# the review fork (#99661 / #146020 / #145377) and PR #99680 (stage-time dedupe, CLOSED
+# unmerged), none of which adds a scope knob.
+#
+# Why: `skills.write_approval: true` gates EVERY skill_manage mutation, including in-place edits
+# to a skill that already exists. On a deployment that keeps the gate on precisely to stop the
+# background review from inventing new skills out of one-off questions (and to keep memory
+# writes reviewed), that means the review's ordinary maintenance patches -- fixing a stale line,
+# appending a verified fact -- all queue up for manual approval too. The queue then grows faster
+# than it can be drained, and every drain turn is itself a normal turn that can trigger another
+# review fork, so approvals produce approvals.
+#
+# Rejected alternatives, so the next maintainer does not re-try them:
+#   * Drain the queue from a 0-LLM cron every N minutes. Works, but the applied patch lands
+#     against a stale baseline: anything that touched the same skill in the window either makes
+#     the patch fail (it rots in the queue) or overwrites the newer change. The window is also a
+#     race by construction.
+#   * Turn the gate off (`write_approval: false`). Kills the creation review too, which is the
+#     whole reason the gate is on.
+#   * Gate by origin (`foreground` vs `background_review`). Wrong axis: what needs review is
+#     creating/replacing a skill, not who wrote it -- the review fork also files good edits, and a
+#     foreground `create` deserves the same review as a background one.
+#   * Keep staging everything and auto-approve the queue. Still leaves a queue, a stale baseline
+#     and a second write path; strictly worse than deciding at the gate.
+#
+# After: `skills.write_approval_scope` (default "all") narrows the skills gate:
+#   "all"    -> every skill_manage mutation stages, byte-identical to v0.22.7 (regression-safe,
+#               including a missing/invalid/unreadable config value: those resolve to "all").
+#   "create" -> `create`, `edit` (whole-SKILL.md rewrite), `delete`, and `write_file`/`remove_file`
+#               that target SKILL.md still stage; `patch` and supporting-file writes
+#               (references/, scripts/, assets/, templates/) apply immediately.
+# Memory is untouched: `memory.write_approval` has no scope knob and keeps staging/inline-prompting
+# exactly as before, including the background-review origin.
+#
+# Wiring: `evaluate_gate()` takes an optional `mutations` list (action/name/file_path per op).
+# `skill_manager_tool._apply_skill_write_gate()` builds it (batch -> its operations, flat call ->
+# one op) and `_run_write_gate()` forwards it. Callers that pass nothing keep unconditional
+# staging, and an unknown action or malformed op fails CLOSED (staged), so a future upstream
+# action cannot slip past the gate.
+#
+# Runtime files only:
+#   tools/write_approval.py       (+2 module constants block, +2 helpers, evaluate_gate kwarg)
+#   tools/skill_manager_tool.py   (_run_write_gate kwarg, _apply_skill_write_gate op list)
+#   hermes_cli/config_defaults.py (the new key + its comment, so `hermes config set` accepts it)
+#
+# Verified 2026-11-04 on the v0.22.7 tag tree (clone at /tmp/pristine-v0227):
+#   * forward apply on pristine: rc=0, zero fuzz, zero .rej/.orig; reverse --dry-run rc=0.
+#     No other patch in patches/*.patch touches these three files (grep -l), so pristine ==
+#     the lexicographic application order for this patch.
+#   * py_compile rc=0 on all three files; scripts/check_structure.py: STRUCTURE OK, GateDecision
+#     0 -> 0 methods, +2 intentional top-level helpers (the WARN).
+#   * ruff check --config pyproject.toml: "All checks passed!" before and after; ruff format --diff
+#     shows none of the added lines as reformat targets.
+#   * Behaviour probe (scope=create, gate on, skill "demo-skill" on disk):
+#       RED on pristine: 8 assertions fail -- evaluate_gate() has no `mutations` kwarg, and
+#         skill_manage(patch) returns staged=true with the file unchanged.
+#       GREEN on patched: patch allowed and the file changed (success, no pending id); create
+#         staged and NOT written; write_file SKILL.md staged; write_file references/x.md allowed;
+#         delete staged; batch [patch, create] staged (one structural op poisons the batch);
+#         memory evaluate_gate still staged.
+#       scope unset and scope="nonsense": patch still staged on both trees (default preserved).
+#
+# Re-anchor on a base bump: anchors are `evaluate_gate()` in tools/write_approval.py (signature +
+# the `if subsystem == SKILLS or current_origin() == ...` line) and `_apply_skill_write_gate()` /
+# `_run_write_gate()` in tools/skill_manager_tool.py. Retire this patch instead of re-anchoring if
+# upstream grows a real per-action / per-scope approval configuration (grep config_defaults for
+# "write_approval" and check for a scope/actions key) -- then map our value onto theirs and tell
+# the user the local key is superseded rather than carrying both.
+diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
+index 426b5a9f..9c2ecb13 100644
+--- a/hermes_cli/config_defaults.py
++++ b/hermes_cli/config_defaults.py
+@@ -1467,6 +1467,10 @@ DEFAULT_CONFIG = {
+         # review fork. true = ALWAYS stage (SKILL.md too large for an inline prompt): /skills
+         # pending, /skills diff <id>, /skills approve|reject <id>.
+         "write_approval": False,
++        # Scope of that gate. "all" = every skill_manage mutation stages (the behaviour above).
++        # "create" = only new skills, whole-SKILL.md rewrites and deletions stage; ordinary edits
++        # to an existing skill apply immediately. Memory has no scope knob and stays fully gated.
++        "write_approval_scope": "all",
+         # Audit ledger: every skill mutation appends to ~/.hermes/skills/.curator_ledger.jsonl with
+         # before/after hashes (blobs under ~/.hermes/.curator_backups/blobs/); powers `hermes
+         # curator ledger` / `rollback <entry-id>`. Never a gate — failures can't block.
+diff --git a/tools/skill_manager_tool.py b/tools/skill_manager_tool.py
+index d73835db..b0d8e93c 100644
+--- a/tools/skill_manager_tool.py
++++ b/tools/skill_manager_tool.py
+@@ -669,15 +669,17 @@ _skill_gate_bypass: _ctxvars.ContextVar[bool] = _ctxvars.ContextVar(
+     "skill_gate_bypass", default=False)
+ 
+ 
+-def _run_write_gate(build_staging):
++def _run_write_gate(build_staging, mutations=None):
+     """Shared write gate: None to proceed, else a JSON tool result (blocked/staged).
+-    ``build_staging(wa) -> (payload, gist)`` runs only when staging. Fails open if
++    ``build_staging(wa) -> (payload, gist)`` runs only when staging. ``mutations`` lets
++    ``skills.write_approval_scope="create"`` let ordinary edits through; omitted by callers that
++    cannot describe the mutation, which keeps the unconditional staging behaviour. Fails open if
+     write_approval cannot be imported."""
+     try:
+         from tools import write_approval as wa
+     except Exception:
+         return None  # fail open
+-    decision = wa.evaluate_gate(wa.SKILLS)
++    decision = wa.evaluate_gate(wa.SKILLS, mutations=mutations)
+     if decision.allow:
+         return None
+     if decision.blocked:
+@@ -698,7 +700,14 @@ def _apply_skill_write_gate(action, name, **payload_kwargs):
+         gist_kw = {k: payload_kwargs.get(k) or ""
+                    for k in ("content", "file_path", "old_string", "new_string")}
+         return payload, wa.skill_gist(action, name, **gist_kw)
+-    return _run_write_gate(_staging)
++    # The scope gate needs the concrete operation set: batch carries its own list, a flat call is
++    # exactly one operation. Only these fields decide "creation vs edit" (see write_approval).
++    if action == "batch":
++        mutations = [op for op in (payload_kwargs.get("operations") or []) if isinstance(op, dict)]
++    else:
++        mutations = [{"action": action, "name": name,
++                      "file_path": payload_kwargs.get("file_path")}]
++    return _run_write_gate(_staging, mutations=mutations)
+ 
+ 
+ _FLAT_OP_KEYS = ("content", "category", "file_path", "file_content", "old_string", "new_string",
+diff --git a/tools/write_approval.py b/tools/write_approval.py
+index 9e285d26..bf30d4f7 100644
+--- a/tools/write_approval.py
++++ b/tools/write_approval.py
+@@ -60,6 +60,56 @@ def _normalize_enabled(value: Any) -> bool:
+     return isinstance(value, str) and value.strip().lower() in _TRUTHY_STRINGS
+ 
+ 
++# ``skills.write_approval_scope`` narrows the skills gate. "all" (default) stages every
++# skill_manage mutation, exactly as before this knob existed. "create" stages only mutations
++# that create a new skill or rewrite / delete an existing skill's SKILL.md, and lets ordinary
++# in-place edits apply immediately. Memory has no scope knob: it stays fully gated.
++SCOPE_KEY = "write_approval_scope"
++_SKILL_SCOPE_ALL = "all"
++_SKILL_SCOPE_CREATE = "create"
++_SKILL_SCOPE_VALUES = frozenset({_SKILL_SCOPE_ALL, _SKILL_SCOPE_CREATE})
++# Actions that are structural regardless of the skill's existence: a new skill, a whole-file
++# rewrite, or a removal. Supporting-file writes/removals are structural only for SKILL.md.
++_REVIEW_ACTIONS = frozenset({"create", "edit", "delete"})
++_REVIEW_FILE_ACTIONS = frozenset({"write_file", "remove_file"})
++_MAIN_SKILL_FILE = "SKILL.md"
++
++
++def skills_write_approval_scope() -> str:
++    """Read ``skills.write_approval_scope``; unset / invalid / unreadable → "all", so a broken
++    config can only keep the stricter upstream behaviour, never loosen it."""
++    try:
++        from hermes_cli.config import load_config, cfg_get
++        raw = cfg_get(load_config(), SKILLS, SCOPE_KEY, default=_SKILL_SCOPE_ALL)
++    except Exception:
++        return _SKILL_SCOPE_ALL
++    value = str(raw or "").strip().lower()
++    return value if value in _SKILL_SCOPE_VALUES else _SKILL_SCOPE_ALL
++
++
++def mutations_need_approval(mutations: Optional[List[Dict[str, Any]]] = None) -> bool:
++    """True when this skill mutation set must be staged under scope="create".
++
++    Unknown actions and empty/odd payloads return True (fail closed): a future action added
++    upstream lands in the approval queue instead of slipping past the gate.
++    """
++    if not mutations:
++        return True
++    for op in mutations:
++        if not isinstance(op, dict):
++            return True
++        action = str(op.get("action") or "").strip().lower()
++        if action in _REVIEW_ACTIONS:
++            return True
++        if action in _REVIEW_FILE_ACTIONS:
++            if str(op.get("file_path") or "").strip() in ("", _MAIN_SKILL_FILE):
++                return True
++            continue
++        if action != "patch":
++            return True
++    return False
++
++
+ # --- Pending store (file-backed) ---
+ 
+ def _pending_path(subsystem: str, pending_id: str) -> Path:
+@@ -198,13 +248,26 @@ def _staged(subsystem: str) -> GateDecision:
+                                              f"Not yet saved — {where}."))
+ 
+ 
+-def evaluate_gate(subsystem: str, *, inline_summary: str = "", inline_detail: str = "") -> GateDecision:
++def evaluate_gate(subsystem: str, *, inline_summary: str = "", inline_detail: str = "",
++                  mutations: Optional[List[Dict[str, Any]]] = None) -> GateDecision:
+     """Decide what to do with a pending write: gate off → allow; gate on + skills (any origin) or
+     background → stage; gate on + memory + foreground → inline prompt when an interactive channel
+     exists, else stage. The gate only ever delays a write, never silently refuses it; ``blocked``
+-    is produced only when the user actively denies the inline prompt."""
++    is produced only when the user actively denies the inline prompt.
++
++    ``mutations`` is the skill operation set the caller is about to apply (list of ops with
++    ``action`` / ``name`` / optional ``file_path``). It is advisory: callers that cannot describe
++    the mutation pass ``None`` and keep the unconditional staging behaviour.
++    """
+     if not write_approval_enabled(subsystem):
+         return GateDecision(allow=True)
++    if (
++        subsystem == SKILLS
++        and mutations is not None
++        and skills_write_approval_scope() == _SKILL_SCOPE_CREATE
++        and not mutations_need_approval(mutations)
++    ):
++        return GateDecision(allow=True)
+     # Skills are too big to review inline; a background write runs in a daemon thread with no user.
+     if subsystem == SKILLS or current_origin() == "background_review":
+         return _staged(subsystem)
