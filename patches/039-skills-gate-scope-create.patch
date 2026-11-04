@@ -36,42 +36,56 @@
 # Memory is untouched: `memory.write_approval` has no scope knob and keeps staging/inline-prompting
 # exactly as before, including the background-review origin.
 #
-# Wiring: `evaluate_gate()` takes an optional `mutations` list (action/name/file_path per op).
-# `skill_manager_tool._apply_skill_write_gate()` builds it (batch -> its operations, flat call ->
-# one op) and `_run_write_gate()` forwards it. Callers that pass nothing keep unconditional
-# staging, and an unknown action or malformed op fails CLOSED (staged), so a future upstream
-# action cannot slip past the gate.
+# Wiring, BOTH call shapes (v0.22.7 has two): `evaluate_gate()` takes an optional `mutations` list
+# (action/name/file_path per op). The flat shape builds it in
+# `skill_manager_tool._apply_skill_write_gate()`; the batch shape (`operations=[...]`, the shape
+# the tool schema actually advertises) returns early from `skill_manage()` into
+# `skill_manager_batch._skill_manage_batch()`, which called `_run_write_gate(_staging)` with no
+# `mutations` -- so a flat-only wiring silently left every batch staging (caught on the deployed
+# image, not by the flat probe: see the batch assertions below). Both paths now pass the op list.
+# Callers that pass nothing keep unconditional staging, and an unknown action or malformed op
+# fails CLOSED (staged), so a future upstream action cannot slip past the gate.
 #
 # Runtime files only:
 #   tools/write_approval.py       (+2 module constants block, +2 helpers, evaluate_gate kwarg)
 #   tools/skill_manager_tool.py   (_run_write_gate kwarg, _apply_skill_write_gate op list)
+#   tools/skill_manager_batch.py  (batch gate passes its operations as `mutations`)
 #   hermes_cli/config_defaults.py (the new key + its comment, so `hermes config set` accepts it)
 #
-# Verified 2026-11-04 on the v0.22.7 tag tree (clone at /tmp/pristine-v0227):
+# Verified 2026-11-04 on the v0.22.7 tag tree (clone at /tmp/pristine-v0227) and re-verified
+# against the built image's own source (/opt/hermes, faster feedback, same code):
 #   * forward apply on pristine: rc=0, zero fuzz, zero .rej/.orig; reverse --dry-run rc=0.
-#     No other patch in patches/*.patch touches these three files (grep -l), so pristine ==
-#     the lexicographic application order for this patch.
-#   * py_compile rc=0 on all three files; scripts/check_structure.py: STRUCTURE OK, GateDecision
-#     0 -> 0 methods, +2 intentional top-level helpers (the WARN).
-#   * ruff check --config pyproject.toml: "All checks passed!" before and after; ruff format --diff
-#     shows none of the added lines as reformat targets.
-#   * Behaviour probe (scope=create, gate on, skill "demo-skill" on disk):
+#     No other patch in patches/*.patch touches these four files (grep -l), so pristine ==
+#     the lexicographic application order for this patch. The deployed image's source applies
+#     and reverse-applies cleanly too (used to rebuild the diff for the batch fix).
+#   * py_compile rc=0 on all four files; scripts/check_structure.py: STRUCTURE OK, with the
+#     +2 intentional top-level helpers reported as WARN.
+#   * ruff check --config pyproject.toml: "All checks passed!" before and after; ruff format
+#     --diff shows none of the added lines as reformat targets.
+#   * Behaviour probe (scope=create, gate on, skill "demo-skill" on disk), flat shape:
 #       RED on pristine: 8 assertions fail -- evaluate_gate() has no `mutations` kwarg, and
 #         skill_manage(patch) returns staged=true with the file unchanged.
 #       GREEN on patched: patch allowed and the file changed (success, no pending id); create
 #         staged and NOT written; write_file SKILL.md staged; write_file references/x.md allowed;
 #         delete staged; batch [patch, create] staged (one structural op poisons the batch);
 #         memory evaluate_gate still staged.
-#       scope unset and scope="nonsense": patch still staged on both trees (default preserved).
+#   * Behaviour probe, batch shape (`operations=[...]`), run against the deployed image:
+#       RED with the flat-only wiring: batch_patch_e2e staged=true, batch_file_after false.
+#       GREEN with this patch: the batch patch applies and the file changes, a batch create is
+#         still staged and not written to disk.
+#   * scope unset and scope="nonsense": patch still staged on both trees (default preserved).
+#   * Pre-existing test suites (tests/tools/test_write_approval.py, test_skill_manager_tool.py,
+#     test_skill_manage_batch.py) on the tag tree: 119 passed both before and after.
 #
 # Re-anchor on a base bump: anchors are `evaluate_gate()` in tools/write_approval.py (signature +
-# the `if subsystem == SKILLS or current_origin() == ...` line) and `_apply_skill_write_gate()` /
-# `_run_write_gate()` in tools/skill_manager_tool.py. Retire this patch instead of re-anchoring if
-# upstream grows a real per-action / per-scope approval configuration (grep config_defaults for
-# "write_approval" and check for a scope/actions key) -- then map our value onto theirs and tell
-# the user the local key is superseded rather than carrying both.
+# the `if subsystem == SKILLS or current_origin() == ...` line), `_apply_skill_write_gate()` /
+# `_run_write_gate()` in tools/skill_manager_tool.py, and the `_run_write_gate(_staging...)` call
+# in tools/skill_manager_batch.py. Retire this patch instead of re-anchoring if upstream grows a
+# real per-action / per-scope approval configuration (grep config_defaults for "write_approval"
+# and check for a scope/actions key) -- then map our value onto theirs and tell the user the
+# local key is superseded rather than carrying both.
 diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
-index 426b5a9f..9c2ecb13 100644
+index 426b5a9..9c2ecb1 100644
 --- a/hermes_cli/config_defaults.py
 +++ b/hermes_cli/config_defaults.py
 @@ -1467,6 +1467,10 @@ DEFAULT_CONFIG = {
@@ -85,8 +99,29 @@ index 426b5a9f..9c2ecb13 100644
          # Audit ledger: every skill mutation appends to ~/.hermes/skills/.curator_ledger.jsonl with
          # before/after hashes (blobs under ~/.hermes/.curator_backups/blobs/); powers `hermes
          # curator ledger` / `rollback <entry-id>`. Never a gate — failures can't block.
+diff --git a/tools/skill_manager_batch.py b/tools/skill_manager_batch.py
+index 78b72dd..109964d 100644
+--- a/tools/skill_manager_batch.py
++++ b/tools/skill_manager_batch.py
+@@ -242,12 +242,14 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
+     if err is not None:
+         return err
+     if not _smt._skill_gate_bypass.get():
+-        # Approval gate for the WHOLE batch as one pending write.
++        # Approval gate for the WHOLE batch as one pending write. The op list goes in so
++        # ``skills.write_approval_scope`` can decide whether this batch is structural (stage)
++        # or ordinary maintenance (apply now).
+         def _staging(wa):
+             acts = ", ".join(op["action"] for op in operations)
+             gist = f"batch({len(operations)} ops: {acts}) on {', '.join(sorted(set(names)))}"
+             return {"action": "batch", "operations": operations}, gist
+-        staged = _smt._run_write_gate(_staging)
++        staged = _smt._run_write_gate(_staging, mutations=operations)
+         if staged is not None:
+             return staged
+     # Every target's lock is held from the snapshot through commit or rollback; the per-op
 diff --git a/tools/skill_manager_tool.py b/tools/skill_manager_tool.py
-index d73835db..b0d8e93c 100644
+index d73835d..b0d8e93 100644
 --- a/tools/skill_manager_tool.py
 +++ b/tools/skill_manager_tool.py
 @@ -669,15 +669,17 @@ _skill_gate_bypass: _ctxvars.ContextVar[bool] = _ctxvars.ContextVar(
@@ -127,7 +162,7 @@ index d73835db..b0d8e93c 100644
  
  _FLAT_OP_KEYS = ("content", "category", "file_path", "file_content", "old_string", "new_string",
 diff --git a/tools/write_approval.py b/tools/write_approval.py
-index 9e285d26..bf30d4f7 100644
+index 9e285d2..bf30d4f 100644
 --- a/tools/write_approval.py
 +++ b/tools/write_approval.py
 @@ -60,6 +60,56 @@ def _normalize_enabled(value: Any) -> bool:
