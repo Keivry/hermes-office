@@ -1,0 +1,190 @@
+hermes-office local patch — NOT an upstream pull request.
+
+Target: clawmem@0.43.5, applied against the installed npm package root
+(/usr/local/lib/node_modules/clawmem), AFTER 036, 040, 041 and 042.
+
+Why: patch 040 gave query expansion its own lane and 041 bounded what happens
+when that lane's host is off — but the bounded answer is still
+expansionFallback(): lex/vec echo the original query and hyde becomes
+"Information about <query>", i.e. NO expansion at all. For a lane pointing at a
+laptop GPU box that is the normal case, not the exception.
+
+This patch adds one failover hop. When the primary lane produces a typed
+fallback — unreachable, in cooldown, transport error, or prose that fails the
+lex:/vec:/hyde: contract — a second, always-on endpoint is tried before the
+degradation is accepted. A healthy primary costs nothing extra: the failover
+instance is only consulted on the fallback path.
+
+Design points worth keeping:
+
+- Separate instance, separate probe/cooldown state. The failover being down must
+  not put the primary into cooldown, and a primary failure must not poison the
+  failover's lane.
+- Only a REAL expansion from the failover replaces the result. A second failure
+  leaves the typed fallback in place, so the caller sees the same value it would
+  have seen without the feature.
+- Both attempts share one deadline (041's fuse). A primary that burned the
+  budget hands the failover an already-expired deadline, and expandQuery returns
+  its fallback immediately rather than starting a doomed fetch.
+- Cache fingerprint gains the failover MODEL NAME (not its URL). Same-name lanes
+  — a GPU box and a CPU box running the same fine-tune — keep one key, so an
+  expansion cached from either survives the primary going offline. Different
+  names split, which is also right. Two endpoints of the same model must NOT
+  produce two cache entries; that would re-pay the 3-6s CPU cost every time.
+- queryLaneFuseDeadline() also arms when only the failover is configured.
+
+Measured against the production expandQuery path (real store, real DB), primary
+= powered-off host, failover = CPU qmd-query-expansion-1.7B:
+
+  primary only (041)        408ms -> typed fallback, no expansion
+  primary down + failover   3154/6026/4835ms -> real lex/vec/hyde
+  both down                 ~0.8s -> typed fallback, nothing cached
+  failover unset            byte-identical to 041
+
+Env:
+  CLAWMEM_QUERY_FALLBACK_URL              e.g. http://127.0.0.1:9089/v1
+  CLAWMEM_QUERY_FALLBACK_MODEL            optional
+  CLAWMEM_QUERY_FALLBACK_API_KEY          optional, falls back to the primary key
+  CLAWMEM_QUERY_FALLBACK_REASONING_EFFORT optional
+  CLAWMEM_QUERY_FALLBACK_NO_THINK         optional, falls back to the primary value
+
+Retire together with 040/041 if upstream grows a lane chain of its own.
+
+--- a/src/llm.ts
++++ b/src/llm.ts
+@@ -2603,6 +2603,11 @@
+ // lane (see getExpansionLlamaCpp below). Null unless CLAWMEM_QUERY_URL is set.
+ let expansionLlamaCpp: LlamaCpp | null = null;
+ 
++// hermes-office patch 043: third instance, the query lane's failover target
++// (see getExpansionFallbackLlamaCpp below). Null unless
++// CLAWMEM_QUERY_FALLBACK_URL is set.
++let expansionFallbackLlamaCpp: LlamaCpp | null = null;
++
+ /**
+  * Dispose the default LlamaCpp instance if it exists.
+  * Call this before process exit to prevent NAPI crashes.
+@@ -2617,6 +2622,11 @@
+     await expansionLlamaCpp.dispose();
+     expansionLlamaCpp = null;
+   }
++  // hermes-office patch 043: ...and the query lane's failover target.
++  if (expansionFallbackLlamaCpp) {
++    await expansionFallbackLlamaCpp.dispose();
++    expansionFallbackLlamaCpp = null;
++  }
+ }
+ 
+ /**
+@@ -2680,3 +2690,54 @@
+   }
+   return expansionLlamaCpp;
+ }
++
++/**
++ * hermes-office patch 043: FAILOVER target for the query-expansion lane.
++ *
++ * The query lane is the one lane that may point at a host which is not always
++ * up (a laptop GPU box). Patch 041 bounds the damage of that — a 400ms probe and
++ * a 300s cooldown — but the answer to "the box is off" is still a typed
++ * fallback, i.e. NO expansion at all. When a second endpoint exists that is
++ * always on (a CPU box running the same qmd-query-expansion model), paying 3-6s
++ * for a real expansion beats paying 0.4s for none.
++ *
++ * This instance is only ever consulted when the PRIMARY lane produced a typed
++ * fallback, so a healthy primary costs nothing extra. It carries its own probe
++ * and cooldown state: the failover target being down must not put the primary
++ * lane into cooldown, and vice versa.
++ *
++ * Same model name on both lanes is the intended shape: identical prompt, same
++ * fine-tune, so the expansion cache key (which fingerprints the model name, not
++ * the endpoint) stays shared and a cached expansion survives the laptop going
++ * offline. Different model names get different cache keys, which is also right.
++ *
++ * Env:
++ *   CLAWMEM_QUERY_FALLBACK_URL              e.g. http://127.0.0.1:9089/v1
++ *   CLAWMEM_QUERY_FALLBACK_MODEL            optional
++ *   CLAWMEM_QUERY_FALLBACK_API_KEY          optional, falls back to the primary lane's key
++ *   CLAWMEM_QUERY_FALLBACK_REASONING_EFFORT optional, unset by default
++ *   CLAWMEM_QUERY_FALLBACK_NO_THINK         optional, falls back to the primary lane's value
++ *
++ * Returns null when unset, which is the whole feature's off switch.
++ */
++export function getExpansionFallbackLlamaCpp(): LlamaCpp | null {
++  const fallbackUrl = process.env.CLAWMEM_QUERY_FALLBACK_URL?.trim();
++  if (!fallbackUrl) return null;
++  if (!expansionFallbackLlamaCpp) {
++    expansionFallbackLlamaCpp = new LlamaCpp({
++      remoteLlmUrl: fallbackUrl,
++      remoteLlmApiKey: process.env.CLAWMEM_QUERY_FALLBACK_API_KEY?.trim()
++        || process.env.CLAWMEM_QUERY_API_KEY?.trim()
++        || process.env.CLAWMEM_LLM_API_KEY || undefined,
++      remoteLlmModel: process.env.CLAWMEM_QUERY_FALLBACK_MODEL?.trim() || undefined,
++      remoteLlmReasoningEffort: process.env.CLAWMEM_QUERY_FALLBACK_REASONING_EFFORT || undefined,
++      remoteLlmNoThink: normalizeRemoteLlmNoThink(
++        process.env.CLAWMEM_QUERY_FALLBACK_NO_THINK
++          ?? process.env.CLAWMEM_QUERY_NO_THINK
++          ?? process.env.CLAWMEM_LLM_NO_THINK,
++      ),
++      remoteLlmProbe: queryLaneProbe() ?? undefined,
++    });
++  }
++  return expansionFallbackLlamaCpp;
++}
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -26,6 +26,7 @@
+   type LLM,
+   getDefaultLlamaCpp,
+   getExpansionLlamaCpp,
++  getExpansionFallbackLlamaCpp,
+   formatQueryForEmbedding,
+   formatDocForEmbedding,
+   sanitizeExpandedQueries,
+@@ -5071,8 +5072,12 @@
+  */
+ function expandLaneFingerprint(): string {
+   const model = process.env.CLAWMEM_QUERY_MODEL?.trim();
++  // hermes-office patch 043: a configured failover model is part of the topology.
++  // Same-name lanes (GPU + CPU running the same fine-tune) keep ONE key, so a
++  // cached expansion survives the primary going offline; different names split.
++  const fallbackModel = process.env.CLAWMEM_QUERY_FALLBACK_MODEL?.trim();
+   if (!process.env.CLAWMEM_QUERY_URL?.trim() && !model) return EXPAND_PROVIDER_FINGERPRINT;
+-  return `${EXPAND_PROVIDER_FINGERPRINT}:${model || "default"}`;
++  return `${EXPAND_PROVIDER_FINGERPRINT}:${model || "default"}${fallbackModel ? `+${fallbackModel}` : ""}`;
+ }
+ 
+ /**
+@@ -5099,7 +5104,8 @@
+  * stock behaviour. Env: CLAWMEM_QUERY_DEADLINE_MS (default 8000, 0 disables).
+  */
+ function queryLaneFuseDeadline(): MonoDeadline | undefined {
+-  if (!process.env.CLAWMEM_QUERY_URL?.trim()) return undefined;
++  // hermes-office patch 043: a failover-only configuration needs the fuse too.
++  if (!process.env.CLAWMEM_QUERY_URL?.trim() && !process.env.CLAWMEM_QUERY_FALLBACK_URL?.trim()) return undefined;
+   const raw = process.env.CLAWMEM_QUERY_DEADLINE_MS;
+   const ms = raw === undefined || raw.trim() === "" ? 8_000 : Number(raw);
+   if (!Number.isFinite(ms) || ms <= 0) return undefined;
+@@ -5152,7 +5158,21 @@
+   // Note: LlamaCpp uses a hardcoded model; the model parameter is ignored here.
+   // Pass intent to steer expansion when provided. `deadline` gives the
+   // remote fetch a REAL abort and structurally disables local inference.
+-  const results = await llm.expandQuery(query, { intent, deadline: fuse });
++  let results = await llm.expandQuery(query, { intent, deadline: fuse });
++
++  // hermes-office patch 043: chained query lane. A primary that is unreachable
++  // (probe / cooldown / transport) or that answers unparseable prose degrades to
++  // the typed fallback — i.e. NO expansion. When a failover lane is configured,
++  // retry there before accepting that degradation; only a REAL expansion from
++  // the failover replaces the result, so a second failure costs nothing beyond
++  // its own bounded attempt. Both lanes share `fuse`, so a primary that burned
++  // the budget leaves the failover an already-expired deadline and it returns
++  // its fallback immediately instead of starting a doomed fetch.
++  const failover = getExpansionFallbackLlamaCpp();
++  if (failover && failover !== llm && isFallbackExpansion(results, query)) {
++    const retried = await failover.expandQuery(query, { intent, deadline: fuse });
++    if (!isFallbackExpansion(retried, query)) results = retried;
++  }
+ 
+   // Defense-in-depth: re-run the shared guard (also covers the local GBNF path and
+   // any future provider), then drop entries that just echo the original query.

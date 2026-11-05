@@ -1030,7 +1030,8 @@ RUN set -eux; \
 # the glob above matches files only, so it never picks these up. Retire the
 # patch together with the ENV/script workarounds it supersedes.
 # Roster (prose, not authority): 036-clawmem-surrogate-safe-truncate,
-# 040-clawmem-query-expansion-lane, 041-clawmem-query-lane-offline-guard.
+# 040-clawmem-query-expansion-lane, 041-clawmem-query-lane-offline-guard,
+# 042-clawmem-reasoning-effort-off, 043-clawmem-query-lane-failover.
 # Numbers are next-free GLOBALLY, not
 # per-roster: 036-039 are already taken by the top-level roster, so the clawmem
 # patch takes 040 rather than a second 037. (036 exists in both rosters by
@@ -1051,13 +1052,15 @@ RUN set -eux; \
 # `patch -p1` returning 0 proves the TEXT matched, not that the change landed
 # where it is USED: a hunk that applies with fuzz into a renamed-but-similar
 # region still exits 0 and ships a silently dead patch. These checks fail the
-# build unless the 040 query lane is both exported and actually wired into the
-# one expansion call site, AND the 041 offline guard is wired into that same
-# branch (probe gate on the remote fetch, fuse on the one expandQuery call).
+# build unless:
+#   040  the query lane is exported and wired into the one expansion call site;
+#   041  its offline guard is on that same branch (probe gate + fuse);
+#   042  `off` is an accepted reasoning_effort value (Command Code's spelling);
+#   043  the failover lane is exported and consulted on the fallback path only.
 # The bun check is a real TS parse (Bun.Transpiler.scan), not a second grep, so
 # a hunk that breaks the module syntax dies here too; it never executes the
 # module, so no env/side effects are needed.
-# Retire this block together with patches/clawmem/040-*.patch and 041-*.patch.
+# Retire this block together with patches/clawmem/040-*.patch through 043-*.patch.
 RUN set -eux; \
     CLAWMEM_PKG=/usr/local/lib/node_modules/clawmem; \
     grep -q 'export function getExpansionLlamaCpp' "$CLAWMEM_PKG/src/llm.ts"; \
@@ -1067,7 +1070,11 @@ RUN set -eux; \
     grep -q 'await this.remoteLlmReachable()' "$CLAWMEM_PKG/src/llm.ts"; \
     grep -q 'const fuse = opts?.deadline ?? queryLaneFuseDeadline()' "$CLAWMEM_PKG/src/store.ts"; \
     grep -q 'deadline: fuse' "$CLAWMEM_PKG/src/store.ts"; \
-    CLAWMEM_ASSERT_FILE="$CLAWMEM_PKG/src/llm.ts" bun -e 'const t=new Bun.Transpiler({loader:"ts"});const {exports}=t.scan(await Bun.file(process.env.CLAWMEM_ASSERT_FILE).text());if(!exports.includes("getExpansionLlamaCpp")){console.error("040 assertion FAILED: getExpansionLlamaCpp not exported");process.exit(1)}console.log("040 assertion OK: query lane exported")'
+    grep -q '"off", "none", "minimal", "low", "medium", "high", "xhigh", "max"' "$CLAWMEM_PKG/src/llm.ts"; \
+    grep -q 'export function getExpansionFallbackLlamaCpp' "$CLAWMEM_PKG/src/llm.ts"; \
+    grep -q 'const failover = getExpansionFallbackLlamaCpp()' "$CLAWMEM_PKG/src/store.ts"; \
+    grep -q 'if (!isFallbackExpansion(retried, query)) results = retried' "$CLAWMEM_PKG/src/store.ts"; \
+    CLAWMEM_ASSERT_FILE="$CLAWMEM_PKG/src/llm.ts" bun -e 'const t=new Bun.Transpiler({loader:"ts"});const {exports}=t.scan(await Bun.file(process.env.CLAWMEM_ASSERT_FILE).text());for(const n of ["getExpansionLlamaCpp","getExpansionFallbackLlamaCpp"]){if(!exports.includes(n)){console.error(`assertion FAILED: ${n} not exported`);process.exit(1)}}console.log("assertion OK: query lane + failover exported")'
 
 COPY skills/ /opt/hermes/skills/
 # s6-overlay cont-init.d hook: runs after base stage2 setup (01-hermes-setup),

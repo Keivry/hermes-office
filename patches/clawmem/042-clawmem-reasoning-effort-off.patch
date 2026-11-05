@@ -1,0 +1,75 @@
+hermes-office local patch — NOT an upstream pull request.
+
+Target: clawmem@0.43.5, applied against the installed npm package root
+(/usr/local/lib/node_modules/clawmem), AFTER 036, 040 and 041.
+
+Why: `reasoning_effort` was validated against one vendor's enum
+(none|minimal|low|medium|high|xhigh) and anything else was dropped with a
+warning. Command Code's gateway uses a different vocabulary — off|low|medium|
+high|xhigh|max — and rejects `none` outright with HTTP 400:
+
+  {"message": "Invalid option: expected one of \"off\"|\"low\"|\"medium\"|
+   \"high\"|\"xhigh\"|\"max\"", "type": "invalid_request_error"}
+
+So the two sets do not intersect at the "no reasoning" end. Setting
+CLAWMEM_LLM_REASONING_EFFORT=none 400s the request, and setting `off` was
+silently ignored — which is worse than an error, because the request then runs
+WITH thinking: a reasoning model spends the entire max_tokens budget in
+reasoning_content and returns an empty content string. Measured on
+deepseek-v4.1-flash with max_tokens=500, the terse QMD expansion prompt:
+
+  reasoning_effort=low   completion 500, reasoning_tokens 500, content ""
+  reasoning_effort=off   completion 406, reasoning_tokens 0,   content 406 chars
+  reasoning_effort=none  HTTP 400
+
+Fix: widen the accepted set to the UNION of the vocabularies in play and pass
+the value through verbatim. `off` is NOT normalized to `none` — that would
+reintroduce the 400 it exists to avoid. Normalization still applies to casing
+and whitespace, and an unknown value still warns and yields null, so a typo
+cannot silently become a different effort.
+
+This is a one-line behavior change with a wide blast radius: the same normalizer
+serves the shared CLAWMEM_LLM_* lane, the CLAWMEM_QUERY_* lane and the
+CLAWMEM_JUDGE_* lane (all construct through `new LlamaCpp({...})` ->
+normalizeRemoteLlmReasoningEffort). Verified: `off` reaches the wire on all
+three, `none` still does too (for gateways that accept it), and an empty value
+still emits no field at all.
+
+--- a/src/llm.ts
++++ b/src/llm.ts
+@@ -422,6 +422,17 @@
+    * Optional top-level reasoning_effort field for Chat Completions endpoints that support it.
+    * Example values: none, minimal, low, medium, high, xhigh.
+    * Env: CLAWMEM_LLM_REASONING_EFFORT
++   *
++   * hermes-office patch 042: the accepted vocabulary is a UNION of what backends
++   * actually take, not one vendor's enum. OpenAI-style gateways spell "no
++   * reasoning" as `none`/`minimal`; Command Code spells it `off` and REJECTS
++   * `none` with HTTP 400 (`Invalid option: expected one of
++   * "off"|"low"|"medium"|"high"|"xhigh"|"max"`). An unknown value used to be
++   * dropped with a warning, so `CLAWMEM_LLM_REASONING_EFFORT=off` against such a
++   * gateway silently ran WITH thinking — the worst outcome, because a reasoning
++   * model then spends the whole max_tokens budget in reasoning_content and
++   * returns an empty content string. Values pass through verbatim; the backend
++   * owns the spelling.
+    */
+   remoteLlmReasoningEffort?: string;
+   /**
+@@ -472,7 +483,16 @@
+  */
+ // Default inactivity timeout: 2 minutes
+ const DEFAULT_INACTIVITY_TIMEOUT_MS = 2 * 60 * 1000;
+-const ALLOWED_REMOTE_LLM_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
++/**
++ * hermes-office patch 042: union of the vocabularies backends actually accept.
++ * `off`/`max` are Command Code's spelling; `none`/`minimal` are the OpenAI-style
++ * ones. The value is forwarded verbatim — normalizing `off` to `none` would
++ * reintroduce the 400 it is meant to avoid. An empty/unset value still yields
++ * null (no field in the request body).
++ */
++const ALLOWED_REMOTE_LLM_REASONING_EFFORTS = new Set([
++  "off", "none", "minimal", "low", "medium", "high", "xhigh", "max",
++]);
+ 
+ /**
+  * Exported so run-identity fingerprints record the SAME normalized value the
