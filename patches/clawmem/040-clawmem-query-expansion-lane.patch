@@ -1,0 +1,181 @@
+# 040-clawmem-query-expansion-lane.patch
+#
+# Local patch -- NOT an upstream PR. Targets the npm package clawmem@0.43.5
+# (CLAWMEM_VERSION in the Dockerfile), NOT /opt/hermes: ClawMem is a global npm
+# install at /usr/local/lib/node_modules/clawmem, so this patch lives in
+# patches/clawmem/ and is applied against that package root by its own build
+# step. Everything directly in patches/ is still applied against /opt/hermes.
+#
+# Why: ClawMem multiplexes five different tasks onto ONE CLAWMEM_LLM_* endpoint
+# -- query expansion, intent classification, A-MEM enrichment, the Stop-hook
+# observer/decision extractor, and handoff summaries. docs/guides/
+# inference-services.md:146 recommends pointing that endpoint at a 7B+ model or
+# a cloud API for entity-extraction quality; but query expansion is the one task
+# whose best model is the qmd-query-expansion-1.7B fine-tune, because
+# llm.expandQuery() parses a rigid line contract (`lex:` / `vec:` / `hyde:`,
+# llm.ts:2193-2201) that only that fine-tune emits. A general chat model answers
+# in prose, every line fails to parse, and store.expandQuery() substitutes
+# expansionFallback() on EVERY call -- and fallbacks are deliberately never
+# cached (store.ts:5128-5132, to avoid poisoning), so the full LLM round-trip is
+# paid again on each query.
+#
+# Observed live 2026-11-05 with CLAWMEM_LLM_URL pointed at deepseek (the
+# configuration the docs recommend), production path via store.expandQuery():
+#   "clawmem judge skipped_budget 预算"   -> 4448 ms -> only
+#       {"type":"hyde","query":"Information about clawmem judge ..."} -> FALLBACK
+#   "笔记本 GPU 嵌入服务怎么启动"          -> 4780 ms -> only
+#       {"type":"hyde","query":"Information about ..."} -> FALLBACK
+# i.e. ~4.5 s and a template stub per query, while `clawmem doctor` still prints
+# "LLM endpoint: ... serves chat completions" -- the degradation is silent.
+#
+# What: a SECOND, independent LlamaCpp instance used by exactly one call site.
+#   llm.ts    getExpansionLlamaCpp() -- returns the default instance unless
+#             CLAWMEM_QUERY_URL is set, in which case it builds and caches a
+#             separate instance from CLAWMEM_QUERY_*. disposeDefaultLlamaCpp()
+#             disposes both (NAPI crash guard).
+#   store.ts  expandQuery() calls getExpansionLlamaCpp() instead of
+#             getDefaultLlamaCpp(); expandQueryCacheKey() fingerprints the
+#             ACTUAL lane (expandLaneFingerprint) so a model swap invalidates
+#             cached expansions instead of serving the previous model's output.
+#
+# Env (all optional; unset CLAWMEM_QUERY_URL = byte-identical to stock):
+#   CLAWMEM_QUERY_URL              e.g. http://127.0.0.1:9089/v1
+#   CLAWMEM_QUERY_MODEL            e.g. qmd-query-expansion-1.7B-q4_k_m.gguf
+#   CLAWMEM_QUERY_API_KEY          optional, falls back to CLAWMEM_LLM_API_KEY
+#   CLAWMEM_QUERY_REASONING_EFFORT optional, unset by default
+#   CLAWMEM_QUERY_NO_THINK         optional, falls back to CLAWMEM_LLM_NO_THINK
+#
+# Deliberately NOT covered: intent classification (causal-retrieval.ts:322).
+# The 1.7B fine-tune is native at intent too, but its reply shape has not been
+# verified against that prompt, so routing it stays a separate, later decision.
+#
+# Side benefit: failure state is isolated. An expansion timeout marks ITS
+# remote lane down instead of tripping the shared instance's cooldown and
+# stalling the observer (the `Remote LLM error: DOMException TimeoutError`
+# poisoning seen during stop-queue drains).
+#
+# Retirement: delete this patch when upstream ships a per-task endpoint
+# (CLAWMEM_EXPAND_URL / CLAWMEM_QUERY_URL) or accepts this diff upstream. The
+# build step's semantic assertion (grep + runtime import check in the
+# Dockerfile) fails the image if the patch silently stops landing.
+#
+--- a/src/llm.ts
++++ b/src/llm.ts
+@@ -2490,6 +2490,10 @@
+   defaultLlamaCpp = llm;
+ }
+ 
++// hermes-office patch 040: second, independent instance for the query-expansion
++// lane (see getExpansionLlamaCpp below). Null unless CLAWMEM_QUERY_URL is set.
++let expansionLlamaCpp: LlamaCpp | null = null;
++
+ /**
+  * Dispose the default LlamaCpp instance if it exists.
+  * Call this before process exit to prevent NAPI crashes.
+@@ -2499,4 +2503,55 @@
+     await defaultLlamaCpp.dispose();
+     defaultLlamaCpp = null;
+   }
++  // hermes-office patch 040: dispose the query lane too (NAPI crash guard).
++  if (expansionLlamaCpp) {
++    await expansionLlamaCpp.dispose();
++    expansionLlamaCpp = null;
++  }
++}
++
++/**
++ * hermes-office patch 040: dedicated QUERY-EXPANSION lane.
++ *
++ * Query expansion is the one task in this codebase whose best model is NOT a
++ * general chat model. llm.expandQuery() parses a rigid line contract --
++ * `lex:` / `vec:` / `hyde:` -- that the qmd-query-expansion fine-tune emits
++ * natively. A general chat model (deepseek, gpt, claude) answers in prose
++ * instead, every line fails to parse, and store.expandQuery() silently
++ * substitutes expansionFallback() on EVERY call (and fallbacks are never
++ * cached, so the full round-trip is paid again on each query).
++ *
++ * Setting CLAWMEM_QUERY_URL routes ONLY query expansion to a second endpoint.
++ * CLAWMEM_LLM_* keeps serving everything else: Stop observer, A-MEM
++ * enrichment, decision extractor, handoff summaries, intent classification.
++ * When CLAWMEM_QUERY_URL is unset this returns the default instance and
++ * behaviour is identical to stock.
++ *
++ * Env:
++ *   CLAWMEM_QUERY_URL              e.g. http://127.0.0.1:9089/v1
++ *   CLAWMEM_QUERY_MODEL            e.g. qmd-query-expansion-1.7B-q4_k_m.gguf
++ *   CLAWMEM_QUERY_API_KEY          optional, falls back to CLAWMEM_LLM_API_KEY
++ *   CLAWMEM_QUERY_REASONING_EFFORT optional, unset by default
++ *   CLAWMEM_QUERY_NO_THINK         optional, falls back to CLAWMEM_LLM_NO_THINK
++ *
++ * A separate instance also isolates failure state: an expansion timeout marks
++ * ITS remote lane down instead of tripping the shared instance's cooldown and
++ * stalling the observer.
++ */
++export function getExpansionLlamaCpp(): LlamaCpp {
++  const queryUrl = process.env.CLAWMEM_QUERY_URL?.trim();
++  if (!queryUrl) return getDefaultLlamaCpp();
++  if (!expansionLlamaCpp) {
++    expansionLlamaCpp = new LlamaCpp({
++      remoteLlmUrl: queryUrl,
++      remoteLlmApiKey: process.env.CLAWMEM_QUERY_API_KEY
++        || process.env.CLAWMEM_LLM_API_KEY || undefined,
++      remoteLlmModel: process.env.CLAWMEM_QUERY_MODEL?.trim() || undefined,
++      remoteLlmReasoningEffort: process.env.CLAWMEM_QUERY_REASONING_EFFORT || undefined,
++      remoteLlmNoThink: normalizeRemoteLlmNoThink(
++        process.env.CLAWMEM_QUERY_NO_THINK ?? process.env.CLAWMEM_LLM_NO_THINK,
++      ),
++    });
++  }
++  return expansionLlamaCpp;
+ }
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -25,6 +25,7 @@
+   LlamaCpp,
+   type LLM,
+   getDefaultLlamaCpp,
++  getExpansionLlamaCpp,
+   formatQueryForEmbedding,
+   formatDocForEmbedding,
+   sanitizeExpandedQueries,
+@@ -5062,6 +5063,19 @@
+ const EXPAND_PROVIDER_FINGERPRINT = "qmd-terse";
+ 
+ /**
++ * hermes-office patch 040: the cache fingerprint must reflect the ACTUAL
++ * expansion lane, not a constant. Without this, swapping CLAWMEM_QUERY_MODEL
++ * would keep serving cached expansions produced by the previous model.
++ * Unset CLAWMEM_QUERY_URL + CLAWMEM_QUERY_MODEL -> stock fingerprint, so a
++ * stock deployment keeps every existing cache entry valid.
++ */
++function expandLaneFingerprint(): string {
++  const model = process.env.CLAWMEM_QUERY_MODEL?.trim();
++  if (!process.env.CLAWMEM_QUERY_URL?.trim() && !model) return EXPAND_PROVIDER_FINGERPRINT;
++  return `${EXPAND_PROVIDER_FINGERPRINT}:${model || "default"}`;
++}
++
++/**
+  * The EXACT llm_cache key expandQuery(query, model, intent) reads and writes.
+  * Exported for eval harnesses (S49.3 freeze protocol): delete/verify expansion
+  * cache rows without replicating the private key construction — the version and
+@@ -5071,7 +5085,7 @@
+   return getCacheKey(`expandQuery:${EXPAND_CACHE_VERSION}`, {
+     query,
+     model,
+-    provider: EXPAND_PROVIDER_FINGERPRINT,
++    provider: expandLaneFingerprint(),
+     ...(intent && { intent }),
+   });
+ }
+@@ -5111,7 +5125,10 @@
+       .map(r => ({ type: r.type, query: r.text }));
+   }
+ 
+-  const llm = getDefaultLlamaCpp();
++  // hermes-office patch 040: query expansion gets its own lane when
++  // CLAWMEM_QUERY_URL is set (qmd-query-expansion emits the lex:/vec:/hyde:
++  // contract); unset -> the shared default instance, unchanged.
++  const llm = getExpansionLlamaCpp();
+   // Note: LlamaCpp uses a hardcoded model; the model parameter is ignored here.
+   // Pass intent to steer expansion when provided. `deadline` gives the
+   // remote fetch a REAL abort and structurally disables local inference.

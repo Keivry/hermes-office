@@ -1029,6 +1029,11 @@ RUN set -eux; \
 # Applied after the CLAWMEM_VERSION install above and before any runtime use;
 # the glob above matches files only, so it never picks these up. Retire the
 # patch together with the ENV/script workarounds it supersedes.
+# Roster (prose, not authority): 036-clawmem-surrogate-safe-truncate,
+# 040-clawmem-query-expansion-lane. Numbers are next-free GLOBALLY, not
+# per-roster: 036-039 are already taken by the top-level roster, so the clawmem
+# patch takes 040 rather than a second 037. (036 exists in both rosters by
+# coincidence -- they have never shared a sequence.)
 COPY patches/clawmem/ /tmp/clawmem-patches/
 RUN set -eux; \
     CLAWMEM_PKG=/usr/local/lib/node_modules/clawmem; \
@@ -1040,6 +1045,22 @@ RUN set -eux; \
         done; \
     fi; \
     rm -rf /tmp/clawmem-patches
+
+# ── ClawMem patch semantic assertions ────────────────────────────────────
+# `patch -p1` returning 0 proves the TEXT matched, not that the change landed
+# where it is USED: a hunk that applies with fuzz into a renamed-but-similar
+# region still exits 0 and ships a silently dead patch. These checks fail the
+# build unless the 040 query lane is both exported and actually wired into the
+# one expansion call site. The bun check is a real TS parse (Bun.Transpiler
+# .scan), not a second grep, so a hunk that breaks the module syntax dies here
+# too; it never executes the module, so no env/side effects are needed.
+# Retire this block together with patches/clawmem/040-*.patch.
+RUN set -eux; \
+    CLAWMEM_PKG=/usr/local/lib/node_modules/clawmem; \
+    grep -q 'export function getExpansionLlamaCpp' "$CLAWMEM_PKG/src/llm.ts"; \
+    grep -q 'const llm = getExpansionLlamaCpp()' "$CLAWMEM_PKG/src/store.ts"; \
+    grep -q 'provider: expandLaneFingerprint()' "$CLAWMEM_PKG/src/store.ts"; \
+    CLAWMEM_ASSERT_FILE="$CLAWMEM_PKG/src/llm.ts" bun -e 'const t=new Bun.Transpiler({loader:"ts"});const {exports}=t.scan(await Bun.file(process.env.CLAWMEM_ASSERT_FILE).text());if(!exports.includes("getExpansionLlamaCpp")){console.error("040 assertion FAILED: getExpansionLlamaCpp not exported");process.exit(1)}console.log("040 assertion OK: query lane exported")'
 
 COPY skills/ /opt/hermes/skills/
 # s6-overlay cont-init.d hook: runs after base stage2 setup (01-hermes-setup),
