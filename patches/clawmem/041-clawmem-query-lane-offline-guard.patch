@@ -1,0 +1,261 @@
+hermes-office local patch — NOT an upstream pull request.
+
+Target: clawmem@0.43.5, applied against the installed npm package root
+(/usr/local/lib/node_modules/clawmem), AFTER 036 and 040 (this patch builds on
+040's separate query-expansion lane).
+
+Why: query expansion is the one lane that can point at a host which is not
+always up (a laptop GPU box). Nothing in the fetch path bounds a connect
+attempt: expandQuery only attaches an AbortSignal when the caller passes a
+deadline, and the CLI/MCP callers do not. A powered-off endpoint therefore
+parks the caller in the kernel SYN retry ladder — measured 132s on Linux with
+tcp_syn_retries=6 — before the transport error can trip the stock 60s cooldown.
+Every fresh CLI process pays it again.
+
+Two independent bounds, both opt-in and inert unless CLAWMEM_QUERY_URL is set:
+
+1. Pre-flight TCP probe (llm.ts): one net.connect with a hard timer
+   (CLAWMEM_QUERY_PROBE_TIMEOUT_MS, default 400ms). Failure trips a longer
+   cooldown (CLAWMEM_QUERY_COOLDOWN_MS, default 300s) because "host powered
+   off" does not clear in 60s, then returns the typed fallback. CLAWMEM_QUERY_PROBE=off
+   disables it.
+2. Abort fuse (store.ts): a deadline for the lane's fetch
+   (CLAWMEM_QUERY_DEADLINE_MS, default 8000, 0 disables). This covers the
+   half-dead case the probe cannot see — TCP accepts but HTTP never answers.
+   A caller-supplied deadline always wins.
+
+Neither bound applies to the shared default instance, so CLAWMEM_LLM_* keeps
+stock behaviour.
+
+Measured against the production expandQuery path (real store, real DB):
+  powered off (SYN dropped)  132432ms -> 408ms, then 1ms inside cooldown
+  live endpoint              3823/3007ms, 5 real lex/vec/hyde expansions
+  half-dead (accept, no reply)  >70s  -> 2000ms at CLAWMEM_QUERY_DEADLINE_MS=2000
+  lane unset                 4363/4081ms fallback, identical to stock
+
+--- a/src/llm.ts
++++ b/src/llm.ts
+@@ -25,6 +25,7 @@
+ import { homedir } from "os";
+ import { join } from "path";
+ import { existsSync, mkdirSync } from "fs";
++import { connect as netConnect, type Socket } from "net";
+ import { createHash } from "crypto";
+ import { timeoutSignal, type MonoDeadline, epochNow, epochMs, monoNow, deadlineAfter, duration, earliest } from "./clock.ts";
+ import { sliceAtCodePointBoundary } from "./limits.ts";
+@@ -430,6 +431,18 @@
+    */
+   remoteLlmNoThink?: boolean;
+   /**
++   * hermes-office patch 041 (local): bounded pre-flight TCP probe for the
++   * query-expansion lane. Set only by getExpansionLlamaCpp().
++   *
++   * Without a deadline the remote fetch has no connect timeout, so a powered-off
++   * host parks the caller in the kernel SYN retry ladder (132s measured on Linux
++   * with tcp_syn_retries=6) before the transport error trips the 60s cooldown.
++   * A sub-second connect probe answers the same question ("is the box up?") for a
++   * bounded cost, and trips a longer cooldown because "host powered off" does not
++   * clear in 60s. Env: CLAWMEM_QUERY_PROBE / _PROBE_TIMEOUT_MS / _COOLDOWN_MS.
++   */
++  remoteLlmProbe?: { timeoutMs: number; cooldownMs: number };
++  /**
+    * When true, generate() never falls back to in-process node-llama-cpp — a remote
+    * failure quietly returns null instead. Set by the v0.29.0 judge factory so a
+    * judge-scoped instance can never auto-download or run the stock local model.
+@@ -595,6 +608,40 @@
+   | { kind: "ok"; dim: number; model: string }
+   | { kind: "transport" | "timeout" | "http" | "instant-trip" | "malformed"; status?: number; detail?: string };
+ 
++/**
++ * hermes-office patch 041 (local): one bounded TCP connect attempt.
++ * `net.connect` plus a hard timer: a dropped SYN cannot park the caller past
++ * `timeoutMs` the way an abort-free fetch does.
++ */
++function probeTcpOnce(host: string, port: number, timeoutMs: number): Promise<boolean> {
++  return new Promise<boolean>((resolve) => {
++    let settled = false;
++    let socket: Socket | null = null;
++    const finish = (ok: boolean) => {
++      if (settled) return;
++      settled = true;
++      clearTimeout(timer);
++      try {
++        socket?.destroy();
++      } catch {
++        /* already gone */
++      }
++      resolve(ok);
++    };
++    const timer = setTimeout(() => finish(false), timeoutMs);
++    try {
++      socket = netConnect({ host, port });
++    } catch {
++      finish(false);
++      return;
++    }
++    socket.setTimeout(timeoutMs);
++    socket.once("connect", () => finish(true));
++    socket.once("error", () => finish(false));
++    socket.once("timeout", () => finish(false));
++  });
++}
++
+ export class LlamaCpp implements LLM {
+   private llama: Llama | null = null;
+   private embedModel: LlamaModel | null = null;
+@@ -615,6 +662,7 @@
+   private remoteLlmModel: string;
+   private remoteLlmReasoningEffort: string | null;
+   private remoteLlmNoThink: boolean;
++  private remoteLlmProbe: { timeoutMs: number; cooldownMs: number } | null;
+   private noLocalFallback: boolean;
+ 
+   // Ensure we don't load the same model concurrently (which can allocate duplicate VRAM).
+@@ -695,6 +743,7 @@
+     this.remoteLlmModel = normalizedRemoteLlmModel || "qwen3";
+     this.remoteLlmReasoningEffort = normalizeRemoteLlmReasoningEffort(config.remoteLlmReasoningEffort);
+     this.remoteLlmNoThink = config.remoteLlmNoThink ?? true;
++    this.remoteLlmProbe = config.remoteLlmProbe ?? null;
+     this.noLocalFallback = config.noLocalFallback ?? false;
+     this.inactivityTimeoutMs = config.inactivityTimeoutMs ?? DEFAULT_INACTIVITY_TIMEOUT_MS;
+     this.disposeModelsOnInactivity = config.disposeModelsOnInactivity ?? false;
+@@ -1146,6 +1195,44 @@
+     );
+   }
+ 
++  /**
++   * hermes-office patch 041 (local): trip the remote lane down for a caller-chosen
++   * duration. The query lane uses this for probe failures — the condition it
++   * detects (host powered off / asleep) outlives the stock 60s cooldown, and every
++   * retry would pay the probe budget again.
++   */
++  private markRemoteLlmDownFor(cooldownMs: number, why: string): void {
++    this.remoteLlmDownUntil = epochMs(epochNow()) + cooldownMs;
++    this.remoteLlmFallbackNotifiedUntil = 0;
++    this.noteRemoteFallback(
++      "llm",
++      `[expandQuery] ${why}; query lane cooling down ${Math.round(cooldownMs / 1000)}s`,
++    );
++  }
++
++  /**
++   * hermes-office patch 041 (local): bounded reachability check before the remote
++   * expansion fetch. Returns true when no probe is configured (stock behaviour).
++   */
++  private async remoteLlmReachable(): Promise<boolean> {
++    const probe = this.remoteLlmProbe;
++    if (!probe || !this.remoteLlmUrl) return true;
++    let host: string;
++    let port: number;
++    try {
++      const parsed = new URL(this.remoteLlmUrl);
++      host = parsed.hostname.replace(/^\[|\]$/g, "");
++      port = Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80));
++    } catch {
++      return true; // malformed URL — let the real call report it
++    }
++    const ok = await probeTcpOnce(host, port, probe.timeoutMs);
++    if (!ok) {
++      this.markRemoteLlmDownFor(probe.cooldownMs, `query lane endpoint ${host}:${port} unreachable`);
++    }
++    return ok;
++  }
++
+   private markRemoteEmbedDown(): void {
+     this.remoteEmbedDownUntil = epochMs(epochNow()) + LlamaCpp.REMOTE_COOLDOWN_MS;
+     this.remoteEmbedFallbackNotifiedUntil = 0;
+@@ -2242,7 +2329,9 @@
+     if (deadline !== undefined && expandSignal === null) return expansionFallback(query, includeLexical);
+ 
+     // Remote LLM path — no grammar constraint, parse output instead
+-    if (this.remoteLlmUrl && !this.isRemoteLlmDown()) {
++    // hermes-office patch 041 (local): bounded reachability probe before the fetch.
++    // No-op unless this instance was built with a probe config (the query lane).
++    if (this.remoteLlmUrl && !this.isRemoteLlmDown() && (await this.remoteLlmReachable())) {
+       const result = await this.expandQueryRemote(query, includeLexical, context, intent, expandSignal ?? undefined);
+       // Check if transport failure set cooldown during this call
+       if (!this.isRemoteLlmDown()) return result;
+@@ -2538,6 +2627,21 @@
+  * ITS remote lane down instead of tripping the shared instance's cooldown and
+  * stalling the observer.
+  */
++/**
++ * hermes-office patch 041 (local): probe settings for the query lane.
++ * `CLAWMEM_QUERY_PROBE=off` disables it; the timeout is deliberately sub-second
++ * because its only job is "is the box up", not "is the model warm".
++ */
++function queryLaneProbe(): { timeoutMs: number; cooldownMs: number } | null {
++  if ((process.env.CLAWMEM_QUERY_PROBE ?? "").trim().toLowerCase() === "off") return null;
++  const rawTimeout = Number(process.env.CLAWMEM_QUERY_PROBE_TIMEOUT_MS ?? 400);
++  const rawCooldown = Number(process.env.CLAWMEM_QUERY_COOLDOWN_MS ?? 300_000);
++  return {
++    timeoutMs: Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : 400,
++    cooldownMs: Number.isFinite(rawCooldown) && rawCooldown > 0 ? rawCooldown : 300_000,
++  };
++}
++
+ export function getExpansionLlamaCpp(): LlamaCpp {
+   const queryUrl = process.env.CLAWMEM_QUERY_URL?.trim();
+   if (!queryUrl) return getDefaultLlamaCpp();
+@@ -2551,6 +2655,7 @@
+       remoteLlmNoThink: normalizeRemoteLlmNoThink(
+         process.env.CLAWMEM_QUERY_NO_THINK ?? process.env.CLAWMEM_LLM_NO_THINK,
+       ),
++      remoteLlmProbe: queryLaneProbe(),
+     });
+   }
+   return expansionLlamaCpp;
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -12,7 +12,7 @@
+  *   const store = createStore();
+  */
+ 
+-import { monoNow, deadlineAfter, earliest, isExpired, timeoutSignal, type DurationMs, type MonoDeadline, isoNow, toDate, epochNow, epochMs } from "./clock.ts";
++import { monoNow, deadlineAfter, earliest, isExpired, timeoutSignal, duration, type DurationMs, type MonoDeadline, isoNow, toDate, epochNow, epochMs } from "./clock.ts";
+ import { COMPACTION_STATE_DDL, fenceEvolutionWriters, notLegacyArtifactSql, notLegacyTaintedEvolutionSql, resetLegacyDerivedNotes } from "./compaction-state.ts";
+ import { clampRelationWeight } from "./relation-weight.ts";
+ import { freshStamp, hasStopStamps, installStopPipelineSchema, stampAssign, stampInsert } from "./stop-schema.ts";
+@@ -5090,6 +5090,22 @@
+   });
+ }
+ 
++/**
++ * hermes-office patch 041 (local): abort fuse for the query-expansion lane.
++ * `expandQuery` has no connect timeout of its own, so a powered-off endpoint
++ * parks the caller in the kernel SYN retry ladder (~132s) before any transport
++ * error can trip a cooldown. A deadline turns that fetch into a real abort.
++ * Applied ONLY when the lane is configured, so the shared default lane keeps
++ * stock behaviour. Env: CLAWMEM_QUERY_DEADLINE_MS (default 8000, 0 disables).
++ */
++function queryLaneFuseDeadline(): MonoDeadline | undefined {
++  if (!process.env.CLAWMEM_QUERY_URL?.trim()) return undefined;
++  const raw = process.env.CLAWMEM_QUERY_DEADLINE_MS;
++  const ms = raw === undefined || raw.trim() === "" ? 8_000 : Number(raw);
++  if (!Number.isFinite(ms) || ms <= 0) return undefined;
++  return deadlineAfter(monoNow(), duration(ms));
++}
++
+ export async function expandQuery(query: string, model: string = DEFAULT_QUERY_MODEL, db: Database, intent?: string, opts?: { deadline?: MonoDeadline }): Promise<ExpandedQuery[]> {
+   // Typed-JSON cache. Versioned key (include intent + provider fingerprint).
+   const cacheKey = expandQueryCacheKey(query, model, intent);
+@@ -5125,6 +5141,10 @@
+       .map(r => ({ type: r.type, query: r.text }));
+   }
+ 
++  // hermes-office patch 041 (local): fuse for the query lane. A caller-supplied
++  // deadline wins; otherwise the lane's own budget applies (undefined when unset).
++  const fuse = opts?.deadline ?? queryLaneFuseDeadline();
++
+   // hermes-office patch 040: query expansion gets its own lane when
+   // CLAWMEM_QUERY_URL is set (qmd-query-expansion emits the lex:/vec:/hyde:
+   // contract); unset -> the shared default instance, unchanged.
+@@ -5132,7 +5152,7 @@
+   // Note: LlamaCpp uses a hardcoded model; the model parameter is ignored here.
+   // Pass intent to steer expansion when provided. `deadline` gives the
+   // remote fetch a REAL abort and structurally disables local inference.
+-  const results = await llm.expandQuery(query, { intent, deadline: opts?.deadline });
++  const results = await llm.expandQuery(query, { intent, deadline: fuse });
+ 
+   // Defense-in-depth: re-run the shared guard (also covers the local GBNF path and
+   // any future provider), then drop entries that just echo the original query.
