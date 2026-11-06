@@ -1031,7 +1031,8 @@ RUN set -eux; \
 # patch together with the ENV/script workarounds it supersedes.
 # Roster (prose, not authority): 036-clawmem-surrogate-safe-truncate,
 # 040-clawmem-query-expansion-lane, 041-clawmem-query-lane-offline-guard,
-# 042-clawmem-reasoning-effort-off, 043-clawmem-query-lane-failover.
+# 042-clawmem-reasoning-effort-off, 043-clawmem-query-lane-failover,
+# 044-clawmem-doctor-probe-reasoning-effort.
 # Numbers are next-free GLOBALLY, not
 # per-roster: 036-039 are already taken by the top-level roster, so the clawmem
 # patch takes 040 rather than a second 037. (036 exists in both rosters by
@@ -1056,11 +1057,13 @@ RUN set -eux; \
 #   040  the query lane is exported and wired into the one expansion call site;
 #   041  its offline guard is on that same branch (probe gate + fuse);
 #   042  `off` is an accepted reasoning_effort value (Command Code's spelling);
-#   043  the failover lane is exported and consulted on the fallback path only.
+#   043  the failover lane is exported and consulted on the fallback path only;
+#   044  the doctor's endpoint probe sends the configured reasoning_effort, so a
+#        reasoning model is not reported as "wrong service on the port".
 # The bun check is a real TS parse (Bun.Transpiler.scan), not a second grep, so
 # a hunk that breaks the module syntax dies here too; it never executes the
 # module, so no env/side effects are needed.
-# Retire this block together with patches/clawmem/040-*.patch through 043-*.patch.
+# Retire this block together with patches/clawmem/040-*.patch through 044-*.patch.
 RUN set -eux; \
     CLAWMEM_PKG=/usr/local/lib/node_modules/clawmem; \
     grep -q 'export function getExpansionLlamaCpp' "$CLAWMEM_PKG/src/llm.ts"; \
@@ -1074,6 +1077,9 @@ RUN set -eux; \
     grep -q 'export function getExpansionFallbackLlamaCpp' "$CLAWMEM_PKG/src/llm.ts"; \
     grep -q 'const failover = getExpansionFallbackLlamaCpp()' "$CLAWMEM_PKG/src/store.ts"; \
     grep -q 'if (!isFallbackExpansion(retried, query)) results = retried' "$CLAWMEM_PKG/src/store.ts"; \
+    grep -q 'reasoningEffort?: string | null' "$CLAWMEM_PKG/src/llm.ts"; \
+    grep -q 'reasoning_effort: opts.reasoningEffort' "$CLAWMEM_PKG/src/llm.ts"; \
+    grep -q 'normalizeRemoteLlmReasoningEffort(process.env.CLAWMEM_LLM_REASONING_EFFORT)' "$CLAWMEM_PKG/src/clawmem.ts"; \
     CLAWMEM_ASSERT_FILE="$CLAWMEM_PKG/src/llm.ts" bun -e 'const t=new Bun.Transpiler({loader:"ts"});const {exports}=t.scan(await Bun.file(process.env.CLAWMEM_ASSERT_FILE).text());for(const n of ["getExpansionLlamaCpp","getExpansionFallbackLlamaCpp"]){if(!exports.includes(n)){console.error(`assertion FAILED: ${n} not exported`);process.exit(1)}}console.log("assertion OK: query lane + failover exported")'
 
 COPY skills/ /opt/hermes/skills/

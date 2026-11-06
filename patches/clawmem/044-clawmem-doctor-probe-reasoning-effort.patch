@@ -1,0 +1,124 @@
+hermes-office local patch — NOT an upstream pull request.
+
+Target: clawmem@0.43.5, applied against the installed npm package root
+(/usr/local/lib/node_modules/clawmem), AFTER 036, 040, 041, 042 and 043.
+
+Why: patch 042 taught the runtime that `off` is a legal reasoning_effort, but the
+doctor's endpoint probe was left behind. `LlamaCpp.probeChatCompletionsShape()`
+(llm.ts) sends a fixed body — model / one user message / max_tokens: 8 /
+temperature: 0 — and never sends reasoning_effort. Against a reasoning model that
+is 8 tokens of reasoning_content and nothing else:
+
+  no reasoning_effort   content=None    reasoning_tokens=8   finish_reason=length
+  reasoning_effort=off  content="OK"    reasoning_tokens=0
+
+The shape check then reports `choices[0].message.content is not a string`, and
+`clawmem doctor` prints:
+
+  ✗ LLM endpoint: ... answered 200 but the body is not a chat-completions
+    response (choices[0].message.content is not a string) — wrong service on
+    the port?
+
+for an endpoint that is serving that very model correctly. Reproduced 3/3 against
+the live gateway while the runtime path (generate() -> buildRemoteLlmRequest(),
+which does send the effort) answered a normal JSON extraction in 1196 ms. A
+diagnostic that cries wolf on the deployment it is meant to certify is worse than
+no diagnostic: it is the only signal that the shared LLM lane — observer,
+decision extractor, A-MEM, handoff — is alive, and it now fails for every
+reasoning model on every gateway.
+
+What:
+  llm.ts      probeChatCompletionsShape() takes an optional reasoningEffort and
+              puts it on the wire only when set (absent config keeps the body
+              byte-identical to stock). Its shape-failure detail now carries
+              finish_reason and reasoning_tokens, so a truncated-but-real reply
+              reads as `(finish_reason=length, reasoning_tokens=8)` instead of
+              accusing the port of running the wrong service.
+  clawmem.ts  the doctor call site passes
+              normalizeRemoteLlmReasoningEffort(CLAWMEM_LLM_REASONING_EFFORT),
+              the same normalizer the request builders use, so the probe and the
+              runtime cannot drift apart again.
+
+Deliberately NOT changed: max_tokens stays 8 and a non-string content still
+fails the probe. Raising the budget would make a thinking model pass by luck
+(deepseek spends 500+ tokens reasoning), and accepting content:null would delete
+the check that catches a genuinely wrong service on the port. The fix is to send
+the policy, not to weaken the assertion.
+
+Retire together with 042 if upstream probes with the configured effort itself.
+
+--- a/src/llm.ts
++++ b/src/llm.ts
+@@ -1346,6 +1346,7 @@
+     apiKey?: string;
+     model?: string;
+     noThink?: boolean;
++    reasoningEffort?: string | null;
+     timeoutMs?: number;
+   }): Promise<
+     | { status: "ok"; model: string }
+@@ -1366,12 +1367,19 @@
+           messages: [{ role: "user", content: noThink ? "Reply with OK /no_think" : "Reply with OK" }],
+           max_tokens: 8,
+           temperature: 0,
++          // Same no-reasoning policy the runtime applies (patch 042): a reasoning
++          // model that is probed WITHOUT its effort setting spends all 8 tokens in
++          // reasoning_content and answers content:null, which this shape check then
++          // misreads as "wrong service on the port". Absent config keeps the field
++          // off the wire, exactly like every other request builder here.
++          ...(opts.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : {}),
+         }),
+         signal: AbortSignal.timeout(opts.timeoutMs ?? 10_000),
+       });
+       if (!resp.ok) return { status: "http", httpStatus: resp.status };
+       const data = await resp.json().catch(() => null) as {
+-        choices?: { message?: { content?: unknown } }[];
++        choices?: { message?: { content?: unknown }; finish_reason?: unknown }[];
++        usage?: { completion_tokens_details?: { reasoning_tokens?: unknown } };
+         model?: string;
+       } | null;
+       // Deep shape check (codex turn-1 finding 4): {"choices":[]} or a choices
+@@ -1380,7 +1388,20 @@
+         return { status: "shape", detail: "no choices array (or it is empty)" };
+       }
+       if (typeof data.choices[0]?.message?.content !== "string") {
+-        return { status: "shape", detail: "choices[0].message.content is not a string" };
++        // Distinguish "not a chat-completions response" from "a real one that got
++        // truncated by max_tokens": finish_reason=length plus reasoning tokens is
++        // the signature of the latter, and it is what a reasoning model produces
++        // when the effort setting did not reach the wire.
++        const finish = data.choices[0]?.finish_reason;
++        const reasoningTokens = data.usage?.completion_tokens_details?.reasoning_tokens;
++        const why = [
++          typeof finish === "string" ? `finish_reason=${finish}` : null,
++          typeof reasoningTokens === "number" ? `reasoning_tokens=${reasoningTokens}` : null,
++        ].filter(Boolean).join(", ");
++        return {
++          status: "shape",
++          detail: `choices[0].message.content is not a string${why ? ` (${why})` : ""}`,
++        };
+       }
+       return { status: "ok", model: data.model || "unnamed" };
+     } catch (err) {
+--- a/src/clawmem.ts
++++ b/src/clawmem.ts
+@@ -42,6 +42,7 @@
+   formatQueryForEmbedding,
+   LlamaCpp,
+   normalizeRemoteLlmNoThink,
++  normalizeRemoteLlmReasoningEffort,
+   type Queryable,
+ } from "./llm.ts";
+ import {
+@@ -4449,6 +4450,11 @@
+         apiKey: process.env.CLAWMEM_LLM_API_KEY || undefined,
+         model: process.env.CLAWMEM_LLM_MODEL,
+         noThink: normalizeRemoteLlmNoThink(process.env.CLAWMEM_LLM_NO_THINK) ?? true,
++        // Probe with the SAME no-reasoning policy the runtime uses. Without it a
++        // reasoning model burns max_tokens=8 on reasoning_content, answers
++        // content:null, and this check reports "wrong service on the port?" for a
++        // perfectly healthy endpoint.
++        reasoningEffort: normalizeRemoteLlmReasoningEffort(process.env.CLAWMEM_LLM_REASONING_EFFORT),
+       });
+       if (probe.status === "ok") {
+         console.log(`${c.green}✓${c.reset} LLM endpoint: ${ep} serves chat completions (model ${probe.model})`);
