@@ -273,7 +273,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # `ls patches/*.patch | wc -l` is the truth, not this paragraph: it read 7 through the
 # v2026.9.24 sweep while the disk held 9, and 10 while the disk held 11. Reconcile it
 # against the disk every sweep before trusting any count here.
-# 040 was ADDED on 2026-11-09 WITHOUT a base bump (roster 12 -> 13): it vendors upstream PR
+# 040 was ADDED on 2026-11-09 WITHOUT a base bump (roster 13 -> 14, per `ls patches/*.patch`): it vendors upstream PR
 # #146765 (OPEN, fix/cron-mcp-startup-readiness) -- a scheduled tick now OBSERVES an in-flight
 # MCP recovery for up to 15s (shared with discovery) before the agent snapshots its tool surface,
 # and a missed deadline WARNs with the still-recovering server names instead of the scheduler
@@ -285,7 +285,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # next move is the initiation side (#109061 / #140429), not a re-anchor of 040. Verified on a
 # pristine cron/ copy: scheduler.py hunk at offset -20, new module created, both py_compile clean,
 # no .orig/.rej; upstream's tests/cron/** hunks are stripped (the image ships no tests/ tree).
-# 041 was ADDED on 2026-11-09 in the same breath (roster 13 -> 14) and DEPENDS ON 040: it patches
+# 041 was ADDED on 2026-11-09 in the same breath (roster 14 -> 15) and DEPENDS ON 040: it patches
 # cron/scheduler_mcp.py, the module 040 creates, so the lexicographic order is load-bearing and a
 # missing 040 fails the build on an unanchorable hunk instead of shipping half a fix (same
 # precedent as 016 depending on 015). It is deployment-local, not an upstream PR. 040 only
