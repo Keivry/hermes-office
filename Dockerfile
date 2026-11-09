@@ -273,6 +273,18 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # `ls patches/*.patch | wc -l` is the truth, not this paragraph: it read 7 through the
 # v2026.9.24 sweep while the disk held 9, and 10 while the disk held 11. Reconcile it
 # against the disk every sweep before trusting any count here.
+# 040 was ADDED on 2026-11-09 WITHOUT a base bump (roster 12 -> 13): it vendors upstream PR
+# #146765 (OPEN, fix/cron-mcp-startup-readiness) -- a scheduled tick now OBSERVES an in-flight
+# MCP recovery for up to 15s (shared with discovery) before the agent snapshots its tool surface,
+# and a missed deadline WARNs with the still-recovering server names instead of the scheduler
+# silently booking a green tool-less run. Motivating symptom here: v0.22.7 + multiplex_profiles
+# true + chrome-devtools -- every cron tick after the process's first stdio idle recycle ran
+# without mcp__chrome_devtools__* (interactive sessions kept them) and agent.log carried no MCP
+# line at all, because _init_cron_mcp_tools() simply saw an empty discovery result. Scope limit:
+# the patch never INITIATES a reconnect, so if "MCP recovery deadline reached" keeps appearing the
+# next move is the initiation side (#109061 / #140429), not a re-anchor of 040. Verified on a
+# pristine cron/ copy: scheduler.py hunk at offset -20, new module created, both py_compile clean,
+# no .orig/.rej; upstream's tests/cron/** hunks are stripped (the image ships no tests/ tree).
 # 17 were retired at v2026.9.11 (v0.21.2):
 # 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
 # timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the

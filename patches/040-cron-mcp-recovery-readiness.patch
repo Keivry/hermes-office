@@ -1,0 +1,135 @@
+# 040 = upstream PR (OPEN) #146765 "fix(cron): wait for MCP recovery before snapshotting
+#   scheduled tools" -- vendored ahead of the merge. Upstream repo:
+#   NousResearch/hermes-agent, branch fix/cron-mcp-startup-readiness.
+#
+#   Why: a scheduled tick snapshots its tool surface immediately after
+#   discover_mcp_tools(). If the MCP transport is recovering at that instant (a
+#   stdio session recycled by idle_timeout_seconds, a gateway re-registration, a
+#   multiplexed profile's scope hand-off), discovery returns zero tools, the
+#   snapshot is taken tool-less, and the run still books green -- no incident,
+#   failure_streak 0. Observed on this deployment: v0.22.7 + gateway.multiplex_profiles
+#   true, chrome-devtools MCP; every cron tick after the process's first idle
+#   recycle ran without mcp__chrome_devtools__* while interactive sessions kept
+#   them, and cron.scheduler logged nothing at all (the non-fatal except path was
+#   never taken -- _mcp_tools was simply empty).
+#
+#   What it does: adds cron/scheduler_mcp.py wait_for_recovery(deadline, job_id)
+#   and calls it from _init_cron_mcp_tools() with a 15s budget shared with
+#   discovery. It OBSERVES an in-flight recovery -- session published, _ready set,
+#   no pending _reconnect_event, every _registered_tool_names entry dispatchable in
+#   this profile's registry -- and returns _existing_tool_names() so the caller logs
+#   "N MCP tool(s) available" instead of staying silent. On deadline it WARNs with
+#   the server names still recovering, so the failure is visible in agent.log.
+#
+#   What it does NOT do: it never INITIATES a reconnect (upstream states that
+#   intent explicitly). A server that is dormant with no recovery in flight still
+#   yields zero tools -- it only stops being silent. If this deployment keeps
+#   logging "MCP recovery deadline reached", the follow-up is the initiation side
+#   (see upstream #109061 refuse-zero-tools preflight and #140429 cold-worker race),
+#   not a tweak to this patch.
+#
+#   Applicability: verified against v0.22.7 by a real `patch -p1 --dry-run` on a
+#   pristine copy of cron/ -- scheduler.py hunk applies at offset -20, the new
+#   module lands as a create, both files py_compile clean afterwards. The upstream
+#   diff also adds tests/cron/** + fixtures; those hunks are STRIPPED here because
+#   the shipped image has no tests/ tree (they would fail the build).
+#
+#   Retire when #146765 merges upstream and HERMES_AGENT_VERSION is bumped.
+#
+# NOTE: the number is the next one in THIS roster, independent of patches/clawmem/040.
+
+diff --git a/cron/scheduler.py b/cron/scheduler.py
+index 70046c33eeb44..ad42adbe71b5e 100644
+--- a/cron/scheduler.py
++++ b/cron/scheduler.py
+@@ -1856,7 +1856,10 @@ def _init_cron_mcp_tools(job_id: str) -> None:
+         # already-connected servers inside register_mcp_servers(). Non-fatal on failure: a broken MCP server
+         # shouldn't kill an otherwise-working cron job. See #4219.
+         from tools.mcp_tool_discovery import discover_mcp_tools
+-        _mcp_tools = discover_mcp_tools()
++        from cron.scheduler_mcp import wait_for_recovery
++        deadline = time.monotonic() + 15.0
++        discover_mcp_tools()
++        _mcp_tools = wait_for_recovery(deadline, job_id)
+         if _mcp_tools:
+             logger.info("Job '%s': %d MCP tool(s) available", job_id, len(_mcp_tools))
+     except Exception as _mcp_exc:
+diff --git a/cron/scheduler_mcp.py b/cron/scheduler_mcp.py
+new file mode 100644
+index 0000000000000..0e62e831ef918
+--- /dev/null
++++ b/cron/scheduler_mcp.py
+@@ -0,0 +1,73 @@
++"""Bounded observation of MCP recovery before a scheduled agent snapshots tools."""
++
++import logging
++import time
++
++logger = logging.getLogger(__name__)
++
++
++def _registered_and_ready(name, server, config):
++    from tools.mcp_tool_registration import _make_tool_filter
++    from tools.registry import registry
++
++    # A session is published before tools/list finishes; ready alone can also
++    # survive a transport failure. Check the current profile's dispatch entries.
++    names = list(server._registered_tool_names)
++    include = _make_tool_filter(name, config)
++    return (
++        server.session is not None
++        and server._ready.is_set()
++        and not server._reconnect_event.is_set()
++        and (names or not any(include(tool.name) for tool in server._tools))
++        and all(
++            (entry := registry.get_entry(tool_name)) is not None
++            and callable(entry.handler)
++            for tool_name in names
++        )
++    )
++
++
++def wait_for_recovery(deadline: float, job_id: str) -> list[str]:
++    """Observe discovery's reconnect, never request another one.
++
++    All eligible servers share the caller's deadline, including time already
++    spent in discovery. Cold discovery retains its existing independent bounds.
++    """
++    from tools import mcp_tool as core
++    from tools.mcp_tool_common import mcp_server_enabled
++    from tools.mcp_tool_discovery import _config, _owner_secret_scope
++    from tools.mcp_tool_registration import _existing_tool_names
++    from tools.mcp_tool_scope import _resolve_server_key
++
++    with _owner_secret_scope():
++        configured = _config._load_mcp_config() or {}
++    with core._lock:
++        recovering = [
++            (name, server)
++            for name, config in configured.items()
++            if mcp_server_enabled(config)
++            and (server := core._servers.get(_resolve_server_key(name))) is not None
++            and server._ever_connected
++            and not (server._park_reason and "permanent" in server._park_reason)
++        ]
++    while recovering:
++        recovering = [
++            (name, server)
++            for name, server in recovering
++            if not _registered_and_ready(name, server, configured[name])
++            and server._task is not None
++            and not server._task.done()
++            and not (server._park_reason and "permanent" in server._park_reason)
++        ]
++        remaining = deadline - time.monotonic()
++        if not recovering or remaining <= 0:
++            break
++        time.sleep(min(0.05, remaining))
++    if recovering:
++        logger.warning(
++            "Job '%s': MCP recovery deadline reached: %s",
++            job_id,
++            ", ".join(name for name, _ in recovering),
++        )
++    # Another discovery could wake a transport again. Selection stays with the agent.
++    return _existing_tool_names()
