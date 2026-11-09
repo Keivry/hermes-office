@@ -1,0 +1,193 @@
+# 041 = deployment-local follow-up to 040 (not an upstream PR). DEPENDS ON 040: it applies the
+#   second half of a two-part fix on the same file (cron/scheduler_mcp.py), so it must sort after
+#   040 -- which it does, lexicographically, and the ordering convention here already has a
+#   precedent (016 depends on 015).
+#
+#   Why 040 alone is not enough: wait_for_recovery() only OBSERVES a recovery already in flight
+#   (its candidate list is `server._task is not None and not done()`), and returns silently when
+#   the current scope holds no server object at all. On this deployment that is the actual cron
+#   failure mode: v0.22.7 + gateway.multiplex_profiles true + chrome-devtools, the tick's scope
+#   resolves zero MCP tools, `_servers` holds no entry for that scope, so 040's loop finds nothing
+#   to wait for, waits 0 seconds, WARNs nothing, and the agent snapshots a tool-less surface --
+#   the run still books green. Measured, not inferred: a probe cron job logged
+#   `tool_search activated (tier 1): 17 core/visible tools kept, 4 deferred` and had ZERO
+#   mcp__chrome_devtools__* entries, while the same PID's interactive session served 29.
+#
+#   What it does (all under the caller's existing 15 s budget, non-fatal per server):
+#     * logs one line every tick naming the run's MCP scope, the configured server count/names and
+#       `mcp_servers_not_connected()` -- the exact triple that was invisible before;
+#     * for each configured-but-not-ready server picks ONE action, cheapest first: heal the current
+#       profile's overlay from an already-live shared connection
+#       (register_connected_into_current_scope), re-wake a recycled stdio session
+#       (_request_lazy_reconnect), or connect it for this run
+#       (_discover_and_register_server via the MCP loop, bounded by the remaining budget);
+#     * skips in-flight connects, permanent parks and connect cooldowns rather than fighting them;
+#     * always ends with a WARNING when the tick still has zero MCP tools, naming the scope --
+#       a silent green tool-less run is impossible from here on.
+#
+#   Verification (real, on a pristine copy of cron/ with 040 applied): py_compile clean; five
+#   control-flow cases (connect / already-ready / empty-config / connect-raises / disabled-entry)
+#   and two branch cases (recycled -> reconnected, live-but-unregistered -> healed(1)) pass with
+#   assertions; and one END-TO-END case against the real MCP SDK spawned chrome-devtools-mcp on a
+#   scratch userDataDir and returned 29 tools / 29 registered names / a live ClientSession.
+#
+#   Known limits, stated rather than hidden: this repairs the scheduled run, not the process-wide
+#   registration. If the tick's scope resolves an EMPTY config (a profile with no mcp_servers), it
+#   cannot conjure servers and says so in the WARNING. It also does not touch gateway behaviour.
+#
+#   Retire together with 040 once upstream lands #146765 plus an initiation-side fix (#109061 /
+#   #140429 cover that ground).
+
+diff --git a/cron/scheduler.py b/cron/scheduler.py
+@@ -1836,10 +1836,10 @@
+         # already-connected servers inside register_mcp_servers(). Non-fatal on failure: a broken MCP server
+         # shouldn't kill an otherwise-working cron job. See #4219.
+         from tools.mcp_tool_discovery import discover_mcp_tools
+-        from cron.scheduler_mcp import wait_for_recovery
++        from cron.scheduler_mcp import revive_and_wait
+         deadline = time.monotonic() + 15.0
+         discover_mcp_tools()
+-        _mcp_tools = wait_for_recovery(deadline, job_id)
++        _mcp_tools = revive_and_wait(deadline, job_id)
+         if _mcp_tools:
+             logger.info("Job '%s': %d MCP tool(s) available", job_id, len(_mcp_tools))
+     except Exception as _mcp_exc:
+diff --git a/cron/scheduler_mcp.py b/cron/scheduler_mcp.py
+@@ -71,3 +71,137 @@
+         )
+     # Another discovery could wake a transport again. Selection stays with the agent.
+     return _existing_tool_names()
++
++
++def _log_scope_state(job_id: str, configured: dict) -> None:
++    """Name what this run's scope can actually see; the old path logged nothing on zero tools."""
++    from tools import mcp_tool as core
++    from tools.mcp_tool_discovery import mcp_servers_not_connected
++
++    logger.info(
++        "Job '%s': MCP scope=%s configured=%d (%s) not_connected=%s",
++        job_id,
++        core._mcp_registry_scope(),
++        len(configured),
++        ", ".join(sorted(configured)) or "-",
++        ", ".join(mcp_servers_not_connected()) or "-",
++    )
++
++
++def _connect_now(name: str, config: dict, deadline: float, job_id: str) -> str:
++    """Connect one server for this run (sync, bounded by the caller's deadline).
++
++    Mirrors the lazy first-use path (``_ensure_lazy_server_connected``) without requiring the
++    server to be marked ``lazy``, so a scheduled run can spawn a server the process never
++    connected — the case a gateway-scope registration never covers.
++    """
++    from tools import mcp_tool as core
++    from tools import mcp_tool_loop as _loop
++    from tools.mcp_tool_discovery import (
++        _discover_and_register_server,
++        _note_connect_failure,
++        _note_connect_success,
++    )
++    from tools.mcp_tool_scope import _resolve_server_key
++
++    key = _resolve_server_key(name)
++    with core._lock:
++        if key in core._server_connecting or key in core._servers:
++            return "connecting"
++        core._server_connecting.add(key)
++        core._server_connect_errors.pop(key, None)
++    budget = float(config.get("connect_timeout", core._DEFAULT_CONNECT_TIMEOUT)) + 30.0
++    budget = max(5.0, min(budget, deadline - time.monotonic()))
++    logger.info("Job '%s': connecting MCP server '%s' for this run (budget %.1fs)", job_id, name, budget)
++    try:
++        _loop._ensure_mcp_loop()
++        _loop._run_on_mcp_loop(
++            lambda: _discover_and_register_server(name, config), timeout=budget)
++    except BaseException as exc:
++        logger.warning("Job '%s': MCP connect for '%s' failed: %s", job_id, name,
++                       _note_connect_failure(name, exc))
++        return "connect_failed"
++    _note_connect_success(name)
++    return "connected"
++
++
++def _revive_one(name: str, config: dict, deadline: float, job_id: str) -> str:
++    """Bring one configured server back for this run; returns the outcome for the log line."""
++    from tools import mcp_tool as core
++    from tools.mcp_tool_discovery import _connect_cooldown_active, _request_lazy_reconnect
++    from tools.mcp_tool_registration import register_connected_into_current_scope
++    from tools.mcp_tool_scope import _resolve_server_key
++
++    key = _resolve_server_key(name)
++    with core._lock:
++        server = core._servers.get(key)
++        connecting = key in core._server_connecting
++    if connecting:
++        return "connecting"
++    if server is not None:
++        if server._park_reason and "permanent" in server._park_reason:
++            return "parked(permanent)"
++        if server.session is not None:
++            # Live transport, but this scope may still lack dispatch entries: heal the overlay
++            # rather than paying for a second process.
++            healed = register_connected_into_current_scope({name: config})
++            return f"healed({healed})" if healed else "live_but_unregistered"
++        if server._is_recycled_stdio():
++            return "reconnected" if _request_lazy_reconnect(name, server) else "reconnect_failed"
++        if server._task is not None and not server._task.done():
++            return "recovering"
++    healed = register_connected_into_current_scope({name: config})
++    if healed:
++        return f"healed({healed})"
++    if _connect_cooldown_active(name):
++        return "cooldown"
++    return _connect_now(name, config, deadline, job_id)
++
++
++def revive_and_wait(deadline: float, job_id: str) -> list[str]:
++    """Actively revive the configured servers this run's scope cannot dispatch, then wait.
++
++    ``wait_for_recovery`` only *observes* a recovery already in flight, so a tick that finds no
++    server object at all (gateway-scope registration, a recycled stdio session nobody re-woke,
++    a profile whose overlay was never healed) waited out its budget and still snapshotted zero
++    tools. This initiates the missing reconnects first, under the same deadline, and always
++    leaves a log line naming the scope and what it could not revive.
++    """
++    configured_all, ready = {}, set()
++    from tools import mcp_tool as core
++    from tools.mcp_tool_common import mcp_server_enabled
++    from tools.mcp_tool_discovery import _config, _owner_secret_scope, mcp_servers_ready
++
++    if not core._ensure_mcp_sdk():
++        logger.warning("Job '%s': MCP SDK unavailable in this process; scheduled MCP tools stay off", job_id)
++        return []
++    with _owner_secret_scope():
++        configured_all = _config._load_mcp_config() or {}
++    configured = {n: c for n, c in configured_all.items() if mcp_server_enabled(c)}
++    _log_scope_state(job_id, configured)
++    if not configured:
++        logger.warning(
++            "Job '%s': MCP config resolves to zero enabled servers under this run's scope (%s); "
++            "scheduled MCP tools stay off", job_id, core._mcp_registry_scope())
++        return []
++    ready = set(mcp_servers_ready())
++    for name in sorted(configured):
++        if name in ready:
++            continue
++        if deadline - time.monotonic() <= 1.0:
++            logger.warning("Job '%s': MCP revival budget spent before '%s'", job_id, name)
++            break
++        try:
++            outcome = _revive_one(name, configured[name], deadline, job_id)
++        except Exception as exc:  # a broken server never kills a working job
++            logger.warning("Job '%s': MCP revival for '%s' failed (non-fatal): %s", job_id, name, exc)
++            continue
++        logger.info("Job '%s': MCP revival '%s' -> %s", job_id, name, outcome)
++        if outcome in ("connected", "reconnected") or outcome.startswith("healed"):
++            ready.add(name)
++    tools = wait_for_recovery(deadline, job_id)
++    if not tools:
++        logger.warning(
++            "Job '%s': no MCP tool registered for this run (scope=%s, configured=%s) -- scheduled "
++            "tools stay off this tick", job_id, core._mcp_registry_scope(), ", ".join(sorted(configured)))
++    return tools

@@ -285,6 +285,20 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # next move is the initiation side (#109061 / #140429), not a re-anchor of 040. Verified on a
 # pristine cron/ copy: scheduler.py hunk at offset -20, new module created, both py_compile clean,
 # no .orig/.rej; upstream's tests/cron/** hunks are stripped (the image ships no tests/ tree).
+# 041 was ADDED on 2026-11-09 in the same breath (roster 13 -> 14) and DEPENDS ON 040: it patches
+# cron/scheduler_mcp.py, the module 040 creates, so the lexicographic order is load-bearing and a
+# missing 040 fails the build on an unanchorable hunk instead of shipping half a fix (same
+# precedent as 016 depending on 015). It is deployment-local, not an upstream PR. 040 only
+# OBSERVES a recovery already in flight and stays silent when the run's scope holds no server
+# object -- which is exactly this deployment's cron failure mode, so 040 alone would have waited
+# zero seconds and changed nothing. 041 initiates the cheapest sufficient action per server (heal
+# the profile overlay from a shared live connection, re-wake a recycled stdio session, or spawn
+# the server for this run), logs the scope + configured names + not_connected triple every tick,
+# and always leaves a WARNING when the tick still ends up with zero MCP tools. Verified on a
+# pristine cron/ copy: both patches apply in order, py_compile clean, the result is byte-identical
+# to the tree the control-flow, branch and real-29-tool end-to-end tests ran against. Its own
+# limit: it repairs the scheduled run, not process-wide registration, and an empty per-profile
+# config cannot be conjured -- it is named in the WARNING instead.
 # 17 were retired at v2026.9.11 (v0.21.2):
 # 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
 # timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the
