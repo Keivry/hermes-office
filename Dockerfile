@@ -1169,14 +1169,14 @@ USER root
 # Create venvs as root — chown back to hermes so runtime access works.
 # NOTE 1: uv picks a "default stable" Python for a bare `uv venv` and it moves with uv releases:
 #         0.11+ downloaded CPython 3.11 (base v2026.8.19), and 0.13.0 -- the uv in the v0.22.5
-#         through v0.22.7 bases -- moved the default to 3.15. Either way the default breaks the
+#         through v0.23.1 bases -- moved the default to 3.15. Either way the default breaks the
 #         cp313 torch wheels, so both venvs below pin `--python 3.13` explicitly.
 # NOTE 2: base images since v2026.8.19 set [tool.uv] exclude-newer in
 #         /opt/hermes/pyproject.toml -- it was "14 days", and since at least v0.22.5 (re-checked on
-#         the v0.22.7 bump) it is "3 days". Since the Dockerfile inherits WORKDIR /opt/hermes, uv
+#         the v0.23.1 bump) it is "3 days". Since the Dockerfile inherits WORKDIR /opt/hermes, uv
 #         resolves that config and refuses packages published inside the window (e.g. docling
-#         2.124.0 then, and docling 2.146.0 on THIS bump: uploaded 2026-11-03 06:43Z, built
-#         2026-11-04). Run from /tmp to bypass -- that cd is what makes a fresh pin installable at
+#         2.124.0 then, and docling 2.150.0 on THIS bump: uploaded 2026-11-10T07:57Z, built the
+#         same day). Run from /tmp to bypass -- that cd is what makes a fresh pin installable at
 #         all, not a style choice.
 RUN cd /tmp \
     && uv venv --python 3.13 /opt/tools/ppt-master/.venv \
