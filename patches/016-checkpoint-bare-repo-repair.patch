@@ -1,7 +1,8 @@
 diff --git a/tools/checkpoint_manager.py b/tools/checkpoint_manager.py
+index 3f711194..91b96e22 100644
 --- a/tools/checkpoint_manager.py
 +++ b/tools/checkpoint_manager.py
-@@ -230,6 +230,28 @@ def _store_has_head(store: Path) -> bool:
+@@ -236,6 +236,28 @@ def _store_has_head(store: Path) -> bool:
      return (store / "HEAD").exists()
  
  
@@ -30,7 +31,7 @@ diff --git a/tools/checkpoint_manager.py b/tools/checkpoint_manager.py
  def _index_path(store: Path, dir_hash: str) -> Path:
      return store / _INDEXES_DIRNAME / dir_hash
  
-@@ -380,6 +402,16 @@ def _run_git(
+@@ -463,6 +485,16 @@ def _run_git(
          logger.error("Git command skipped: %s (%s)", " ".join(["git"] + list(args)), msg)
          return False, "", msg
  
@@ -47,7 +48,7 @@ diff --git a/tools/checkpoint_manager.py b/tools/checkpoint_manager.py
      env = _git_env(store, str(normalized_working_dir), index_file=index_file)
      if extra_env:
          env.update(extra_env)
-@@ -392,23 +424,37 @@ def _run_git(
+@@ -475,23 +507,37 @@ def _run_git(
      try:
          # NUL-delimited git output contains literal filenames, not text lines.
          text_options = {} if "-z" in args else {"text": True, "encoding": "utf-8", "errors": "replace"}
@@ -102,13 +103,13 @@ diff --git a/tools/checkpoint_manager.py b/tools/checkpoint_manager.py
          if not ok and result.returncode not in allowed_returncodes:
              logger.error(
                  "Git command failed: %s (rc=%d) stderr=%s",
-@@ -552,6 +598,9 @@ def _init_store(store: Path, working_dir: str) -> Optional[str]:
+@@ -608,6 +654,9 @@ def _init_store(store: Path, working_dir: str) -> Optional[str]:
          _migrate_legacy_store(base)
  
      if (store / "HEAD").exists():
 +        # A store broken by an earlier gc (refs/heads removed, no repair reachable)
 +        # must be healed on open, or every checkpoint in this process fails.
 +        _repair_bare_repo_dirs(store)
-         # An existing store keeps whatever exclude file it was created with, so a
-         # pattern added since (node-compile-cache/) never reaches it without this.
-         _ensure_store_excludes(store)
+         _write_default_excludes(store)  # a store made by an older build gets new excludes too
+         return None
+ 

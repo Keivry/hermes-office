@@ -29,7 +29,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 - Python virtual environment created at `/opt/tools/ppt-master/.venv`
 - Dependencies installed from `requirements.txt`
 - `libcairo2-dev` + `pkg-config` are included because the current `svglib` dependency chain may pull `rlpycairo` / `pycairo` during install
-- Current pinned version in `Dockerfile`: `v6.8.0`
+- Current pinned version in `Dockerfile`: `v6.9.0`
 
 ### ImageMagick
 - Installed from the distro package as `imagemagick`
@@ -38,11 +38,11 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 ### Docling
 - Installed into `/opt/tools/docling/.venv`
 - Exposed on `PATH` via `ENV PATH="/opt/tools/docling/.venv/bin:${PATH}"`
-- Current pinned version in `Dockerfile`: `2.146.0`
+- Current pinned version in `Dockerfile`: `2.150.0`
 - Installed in two steps for stability:
   1. install exact pinned CPU wheels for `torch==2.14.1+cpu` and `torchvision==0.29.1+cpu`
-  2. install `docling==2.146.0` from the normal Python package index
-- The upstream Hermes base image sets `[tool.uv] exclude-newer` in `/opt/hermes/pyproject.toml` (3 days as of `v0.22.7`); the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs (docling `2.146.0` was uploaded 1 day before this bump, so the bypass is what makes the pin installable)
+  2. install `docling==2.150.0` from the normal Python package index
+- The upstream Hermes base image sets `[tool.uv] exclude-newer` in `/opt/hermes/pyproject.toml` (3 days as of `v0.23.1`); the Dockerfile runs uv installs from `/tmp` to bypass that freshness window for docling and other PyPI installs (docling `2.150.0` was uploaded 2026-11-10, the same day as this bump, so the bypass is what makes the pin installable)
 - Since base `v0.21.6` the base image deliberately keeps `uv` off `PATH` (its PM store resolves the pinned binary for dependency preparation only); the Dockerfile re-exposes that same binary via a `/usr/local/bin/uv` symlink for the build and drops the shim once the tool venvs are assembled, so the published image ships no installer on `PATH`
 - Current image installs the base `docling` package (not the optional VLM extras)
 
@@ -67,7 +67,7 @@ This repository reuses the same GitHub Actions build/publish pattern as `Keivry/
 
 ### ClawMem
 - Installed globally as `clawmem` at `/usr/local/bin/clawmem` (installed with npm `--prefix /usr/local`; the base image resolves `node` out of its own PM store, so npm's implicit global prefix no longer points at `/usr/local`)
-- Current pinned version in `Dockerfile`: `0.43.5`
+- Current pinned version in `Dockerfile`: `0.43.6`
 - The Hermes memory provider plugin is staged under `/opt/tools/clawmem-plugin`
 - On container start, the s6 cont-init.d hook syncs that plugin into `$HERMES_HOME/plugins/clawmem`
 - The image defaults to **external-model / remote-GPU** style operation:
