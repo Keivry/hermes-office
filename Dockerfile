@@ -307,6 +307,18 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # to the tree the control-flow, branch and real-29-tool end-to-end tests ran against. Its own
 # limit: it repairs the scheduled run, not process-wide registration, and an empty per-profile
 # config cannot be conjured -- it is named in the WARNING instead.
+# As of 2026-11-10 (still the v0.23.1 base) the roster is 16 patches: 042 was ADDED
+# WITHOUT a base bump (roster 15 -> 16). v0.23.1 moved the workspace build from npm to
+# pnpm and pm/lock.json now pins pnpm 12.15.0, but pnpm is installed in the build stages
+# only -- the runtime stage carries none by design. `class Pnpm` in pm/packages.py has no
+# `optional` flag, so pm.drift() treats it as a required runtime package and every CLI
+# dispatch plus every gateway boot reports `install out of sync (pnpm: not installed or
+# outdated)` with a `rebuild the artifact` remedy that cannot fix it. 042 sets
+# `optional = True` (one attribute, no behaviour change beyond drift()); RETIRE it once a
+# tag's pm/packages.py marks Pnpm optional/internal or drops pnpm from pm/lock.json.
+# Verified: dry-run and real apply rc=0 with zero fuzz/.rej on the 15-patch tree,
+# py_compile + repo ruff clean, check_structure clean, and a drift() probe that reports
+# {pnpm, node} before the patch and {node} after it.
 # 17 were retired at v2026.9.11 (v0.21.2):
 # 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
 # timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the
