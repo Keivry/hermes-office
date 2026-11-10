@@ -156,3 +156,23 @@ python3 -c "import tools.checkpoint_manager, toolsets, cron.scheduler_mcp; print
 ```
 
 Then send one Matrix DM, one cron delivery, and one skill-write, and confirm each in the log.
+
+## 11. pnpm drift warning (roster 042)
+
+Before 042 every `hermes ...` dispatch printed
+`install out of sync (pnpm: not installed or outdated) — this docker-managed
+install must rebuild the artifact to fix`, and the gateway logged the same line
+once per boot. It is a false positive: v0.23.1 installs pnpm in the build stages
+only, while `class Pnpm` had no `optional` flag. 042 marks it optional.
+
+After deploying an image that contains 042:
+
+- `hermes status` / `hermes doctor` print **no** `install out of sync` line;
+- `/opt/data/logs/gateway.log` gains no new occurrence after the restart;
+- the check itself is still live:
+  `/opt/hermes/.venv/bin/python -c 'import sys; sys.path.insert(0,"/opt/hermes"); import pm; print(pm.activate())'`
+  → `[]`.
+
+If the line is still there, the patch layer is stale — confirm
+`grep -n "optional = True" /opt/hermes/pm/packages.py` hits inside `class Pnpm`
+(line ~800) and that the build log shows `==> Applying 042-pm-pnpm-build-only.patch`.
