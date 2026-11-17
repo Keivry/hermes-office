@@ -1,8 +1,35 @@
-diff --git a/tools/send_message_senders.py b/tools/send_message_senders.py
-index 3cfd9392..c1ef381a 100644
---- a/tools/send_message_senders.py
-+++ b/tools/send_message_senders.py
-@@ -20,6 +20,11 @@ _CAPTIONABLE_EXTS = _IMAGE_EXTS | _VIDEO_EXTS | {".pdf", ".doc", ".docx", ".txt"
+# Why: upstream #77100 (CLOSED, NOT merged) -- a cron standalone delivery runs
+# `asyncio.run()` on a fresh loop in the scheduler thread. send_message's Matrix
+# live-adapter path then awaits the gateway-bound mautrix/aiohttp session from a
+# DIFFERENT loop, so aiohttp's TimerContext raises "Timeout context manager should
+# be used inside a task" and every scheduled Matrix delivery fails. Falling back to
+# an ephemeral adapter instead re-inits E2EE and hits BAD_ACCOUNT_KEY on the shared
+# crypto store (#46310), so the send must be SCHEDULED onto the adapter's own loop.
+#
+# RE-ANCHORED on the v0.23.2 bump: upstream moved
+#   tools/send_message_senders.py -> gateway/outbound/senders.py
+# (send.py keeps the tool entrypoint, senders.py the per-platform senders). Two
+# context hunks apply unchanged; the import/logic hunks were re-derived from the
+# tagged file. The move also exposed a latent bug in the v0.23.1 form of this
+# patch: senders.py does NOT import asyncio, so `asyncio.get_running_loop()` raised
+# NameError inside _matrix_adapter_loop_matches()'s try/except and the helper
+# silently returned True (legacy direct await) -- the bridge was dead code. This
+# revision adds `import asyncio` explicitly.
+#
+# Keep until #77100 or an equivalent loop check merges upstream.
+
+diff --git a/gateway/outbound/senders.py b/gateway/outbound/senders.py
+--- a/gateway/outbound/senders.py
++++ b/gateway/outbound/senders.py
+@@ -1,5 +1,7 @@
+ """Standalone per-platform senders and error helpers for send_message."""
+ 
++import asyncio
++
+ from pm import install_hint
+ import contextlib
+ import inspect
+@@ -20,6 +22,11 @@
  # Native caption limit (chars): one conservative shared ceiling (Telegram's 1024 lives in its plugin).
  _DEFAULT_CAPTION_LIMIT = 4096
  
@@ -14,7 +41,7 @@ index 3cfd9392..c1ef381a 100644
  
  def _media_caption_split(text, media_files, *, max_caption_len):
      """Single chokepoint deciding whether text rides on the media bubble as its caption:
-@@ -190,6 +195,86 @@ async def _resolve_slack_user_target(token, chat_id):
+@@ -209,6 +216,86 @@
          return None, _error(f"Slack DM resolution failed: {describe_proxy_error(e, proxy) or e}")
  
  
@@ -101,8 +128,8 @@ index 3cfd9392..c1ef381a 100644
  # "ephemeral connect (may re-init E2EE per send, see #46310)",
  async def _send_matrix_via_adapter(pconfig, chat_id, message, media_files=None, thread_id=None):
      """Matrix adapter send (native media preserved). Prefer the live gateway adapter's persistent
-@@ -208,7 +293,16 @@ async def _send_matrix_via_adapter(pconfig, chat_id, message, media_files=None,
-         "ephemeral connect (may re-init E2EE per send)"))
+@@ -230,7 +317,16 @@
+         return _error(str(e))
      if live_adapter is not None:
          # Owned by the gateway — must NOT be disconnected (return before the ephemeral ``finally``).
 -        return await _matrix_send_core(live_adapter, chat_id, message, media_files, metadata)
