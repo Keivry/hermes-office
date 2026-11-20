@@ -71,6 +71,12 @@
 #   (d) Independent earlier confirmation, in-memory two-hunk patch on the same history:
 #       H1-last-only+H2 -> 200, H1-all+H2 -> 200, H2-only -> 400 (nothing to forward).
 #
+# v0.23.3 re-anchor (2026-11-20): H1 now appends _ReplayItem.from_stored({}, {...}) instead of
+#   a bare dict, because _replay_reasoning_items returns _ReplayItem objects and the converter
+#   sorts them by .position. A dict would have raised AttributeError on the first orphan turn.
+#   The synthetic item gets position -1 (legacy_position for non-function_call), so it stays
+#   before the turn's message/tool items exactly like the old emit order. H2 is unchanged.
+#
 # Retire when: upstream ships an equivalent (synthesize the missing reasoning item for a turn
 #   with no persisted sidecar) AND that fix is an ancestor of the pinned base tag -- re-check by
 #   ancestry, not by #133799's state (still OPEN/DRAFT as of 2026-10-16). Re-anchor anchors:
@@ -78,10 +84,11 @@
 #   _capture_encrypted_item (the None-on-no-blob branch is the actual trigger).
 #
 diff --git a/agent/codex_responses_adapter.py b/agent/codex_responses_adapter.py
+index 05e6cd45..2aab6637 100644
 --- a/agent/codex_responses_adapter.py
 +++ b/agent/codex_responses_adapter.py
-@@ -505,6 +505,25 @@
-         replayed.append(replayed_item)
+@@ -554,6 +554,25 @@ def _replay_reasoning_items(
+         replayed.append(_ReplayItem.from_stored(ri, wire))
          if item_id:
              seen_item_ids.add(item_id)
 +    if require_reasoning_text_echo and not replayed:
@@ -98,15 +105,15 @@ diff --git a/agent/codex_responses_adapter.py b/agent/codex_responses_adapter.py
 +        if not isinstance(reasoning_text, str):
 +            reasoning_text = msg.get("reasoning") if isinstance(msg.get("reasoning"), str) else ""
 +        reasoning_text = reasoning_text.strip()
-+        replayed.append({
++        replayed.append(_ReplayItem.from_stored({}, {
 +            "type": "reasoning",
 +            "content": [{"type": "reasoning_text", "text": reasoning_text or " "}],
 +            "summary": [],
-+        })
++        }))
      return replayed
  
  
-@@ -874,6 +893,24 @@
+@@ -925,6 +944,24 @@ def _preflight_encrypted(item: dict[str, Any], idx: int, ctx: _PreflightCtx) ->
      """``reasoning`` / ``compaction`` items: opaque, issuer-sealed; forward only API-defined fields."""
      encrypted = item.get("encrypted_content")
      if not _nonempty_str(encrypted):

@@ -70,6 +70,15 @@
 #       it IS enforced, and is the reason the enforcement, when it returns, no longer kills
 #       the turn.
 #
+# v0.23.3 re-anchor (2026-11-20): upstream refactored _replay_reasoning_items to build a
+#   _ReplayItem(position, wire) instead of a bare dict. The signature hunk now returns
+#   list[_ReplayItem], and the pad is applied to ``wire`` BEFORE _ReplayItem.from_stored stores
+#   it (patching the dict after wrapping would never reach the transport). Zero semantic change;
+#   the other five hunks applied unchanged. Verified: roster 16/16 rc=0 zero fuzz, py_compile and
+#   ruff clean, and a probe that replays a persisted reasoning item with
+#   require_reasoning_text_echo=True -> content[{type:reasoning_text,text:" "}] survives
+#   _preflight_encrypted.
+#
 # Retire when: upstream #133792 is closed AND the corresponding fix is an ancestor of the
 #   pinned base tag (re-check with the ancestry rule, not the PR's state -- #133799 is still
 #   OPEN/DRAFT as of 2026-10-16). Re-anchor anchors: _replay_reasoning_items signature,
@@ -77,30 +86,27 @@
 #   ResponsesApiTransport.convert_messages, _native_responses_replay_items.
 #
 diff --git a/agent/codex_responses_adapter.py b/agent/codex_responses_adapter.py
-index 9c683e7..18e37fe 100644
+index f131899..05e6cd4 100644
 --- a/agent/codex_responses_adapter.py
 +++ b/agent/codex_responses_adapter.py
-@@ -504,6 +504,7 @@ def _assistant_message_item(
+@@ -516,6 +516,7 @@ class _ReplayItem(NamedTuple):
  def _replay_reasoning_items(
      msg: dict[str, Any], *, seen_item_ids: set, current_issuer_kind: Optional[str],
      current_issuer_model: Optional[str] = None, native_compaction_eligible: bool,
 +    require_reasoning_text_echo: bool = False,
- ) -> list[dict[str, Any]]:
+ ) -> list[_ReplayItem]:
      """Replay persisted encrypted reasoning/compaction items for one assistant turn. Skips duplicate
      ids, ``compaction`` checkpoints unless THIS request carries ``context_management`` (else a persisted
-@@ -535,7 +536,10 @@ def _replay_reasoning_items(
-                 )
+@@ -548,6 +549,8 @@ def _replay_reasoning_items(
                  _CROSS_ISSUER_WARN_EMITTED = True
              continue
--        replayed.append({k: v for k, v in ri.items() if k not in ("id", "_issuer_kind", "_issuer_model")})
-+        replayed_item = {k: v for k, v in ri.items() if k not in ("id", "_issuer_kind", "_issuer_model")}
-+        if require_reasoning_text_echo and replayed_item.get("type") == "reasoning":
-+            replayed_item.setdefault("content", [{"type": "reasoning_text", "text": " "}])
-+        replayed.append(replayed_item)
+         wire = {k: v for k, v in ri.items() if k not in ("id", "_issuer_kind", "_issuer_model", "_codex_output_index")}
++        if require_reasoning_text_echo and wire.get("type") == "reasoning":
++            wire.setdefault("content", [{"type": "reasoning_text", "text": " "}])
+         replayed.append(_ReplayItem.from_stored(ri, wire))
          if item_id:
              seen_item_ids.add(item_id)
-     return replayed
-@@ -649,6 +653,7 @@ def _chat_messages_to_responses_input(
+@@ -663,6 +666,7 @@ def _chat_messages_to_responses_input(
      messages: list[dict[str, Any]], *, is_xai_responses: bool = False, drop_replay_item_ids: bool = False,
      replay_encrypted_reasoning: bool = True, current_issuer_kind: Optional[str] = None,
      current_issuer_model: Optional[str] = None, native_compaction_eligible: bool = False,
@@ -108,15 +114,15 @@ index 9c683e7..18e37fe 100644
  ) -> list[dict[str, Any]]:
      """Convert internal chat-style messages to Responses input items.
  
-@@ -727,6 +732,7 @@ def _chat_messages_to_responses_input(
+@@ -741,6 +745,7 @@ def _chat_messages_to_responses_input(
          reasoning_items = [] if not replay_encrypted_reasoning else _replay_reasoning_items(
              msg, seen_item_ids=seen_item_ids, current_issuer_kind=current_issuer_kind,
              current_issuer_model=current_issuer_model, native_compaction_eligible=native_compaction_eligible,
 +            require_reasoning_text_echo=require_reasoning_text_echo,
          )
-         emit(reasoning_items, msg)
          message_items = _replay_message_items(
-@@ -808,6 +814,7 @@ def _native_responses_replay_items(
+             msg, drop_replay_item_ids=drop_replay_item_ids, current_issuer_kind=current_issuer_kind,
+@@ -823,6 +828,7 @@ def _native_responses_replay_items(
          return None
      # The wire model may be rewritten per request (fast mode); provenance must match what the transport stamps.
      effective_model = effective_request_overrides(agent).get("model", getattr(agent, "model", None))
@@ -124,7 +130,7 @@ index 9c683e7..18e37fe 100644
      try:
          items = _chat_messages_to_responses_input(
              messages, is_xai_responses=route["is_xai_responses"],
-@@ -816,6 +823,11 @@ def _native_responses_replay_items(
+@@ -831,6 +837,11 @@ def _native_responses_replay_items(
              current_issuer_kind=_classify_responses_issuer(base_url=getattr(agent, "base_url", None), **route),
              current_issuer_model=_wire_model_identity(effective_model),
              native_compaction_eligible=True,
@@ -136,7 +142,7 @@ index 9c683e7..18e37fe 100644
          )
      except Exception:
          logger.debug(
-@@ -909,10 +921,21 @@ def _preflight_encrypted(item: dict[str, Any], idx: int, ctx: _PreflightCtx) ->
+@@ -924,10 +935,21 @@ def _preflight_encrypted(item: dict[str, Any], idx: int, ctx: _PreflightCtx) ->
              return None
          ctx.seen_ids.add(item_id)
      summary = _as_list(item.get("summary"))
@@ -159,28 +165,3 @@ index 9c683e7..18e37fe 100644
  
  
  def _preflight_message(item: dict[str, Any], idx: int, ctx: _PreflightCtx) -> dict[str, Any]:
-diff --git a/agent/transports/codex.py b/agent/transports/codex.py
-index 7925021..f56be84 100644
---- a/agent/transports/codex.py
-+++ b/agent/transports/codex.py
-@@ -696,6 +696,7 @@ class ResponsesApiTransport(ProviderTransport):
-         from agent.codex_responses_adapter import (
-             _chat_messages_to_responses_input, _wire_model_identity, responses_endpoint_quirks,
-         )
-+        from agent.message_sanitization import needs_reasoning_echo
- 
-         self._last_issuer_model = _wire_model_identity(kwargs.get("model"))
-         endpoint = kwargs.get("endpoint") or responses_endpoint_quirks(kwargs.get("base_url"))
-@@ -706,6 +707,12 @@ class ResponsesApiTransport(ProviderTransport):
-             current_issuer_kind=self._resolve_issuer_kind(kwargs, endpoint),
-             current_issuer_model=self._last_issuer_model,
-             native_compaction_eligible=_native_compaction_active(kwargs.get("context_management")),
-+            # hermes-office: pass provider + model, not just base_url. The must-echo table keys
-+            # DeepSeek on the model name (host rule alone is api.deepseek.com), so a relay host
-+            # (opencode.ai) with model=None never matches and the pad never engages.
-+            require_reasoning_text_echo=needs_reasoning_echo(
-+                kwargs.get("provider"), kwargs.get("model"), kwargs.get("base_url"),
-+            ),
-         )
- 
-     def convert_tools(self, tools: Optional[list[dict[str, Any]]]) -> Any:

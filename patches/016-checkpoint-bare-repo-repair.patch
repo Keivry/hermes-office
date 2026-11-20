@@ -1,8 +1,8 @@
-diff --git a/tools/checkpoint_manager.py b/tools/checkpoint_manager.py
-index 3f711194..91b96e22 100644
---- a/tools/checkpoint_manager.py
-+++ b/tools/checkpoint_manager.py
-@@ -236,6 +236,28 @@ def _store_has_head(store: Path) -> bool:
+diff --git a/agent/checkpoints/manager.py b/agent/checkpoints/manager.py
+index f39334c..5961e08 100644
+--- a/agent/checkpoints/manager.py
++++ b/agent/checkpoints/manager.py
+@@ -231,6 +231,28 @@ def _store_has_head(store: Path) -> bool:
      return (store / "HEAD").exists()
  
  
@@ -31,7 +31,7 @@ index 3f711194..91b96e22 100644
  def _index_path(store: Path, dir_hash: str) -> Path:
      return store / _INDEXES_DIRNAME / dir_hash
  
-@@ -463,6 +485,16 @@ def _run_git(
+@@ -458,6 +480,16 @@ def _run_git(
          logger.error("Git command skipped: %s (%s)", " ".join(["git"] + list(args)), msg)
          return False, "", msg
  
@@ -48,7 +48,7 @@ index 3f711194..91b96e22 100644
      env = _git_env(store, str(normalized_working_dir), index_file=index_file)
      if extra_env:
          env.update(extra_env)
-@@ -475,23 +507,37 @@ def _run_git(
+@@ -470,23 +502,37 @@ def _run_git(
      try:
          # NUL-delimited git output contains literal filenames, not text lines.
          text_options = {} if "-z" in args else {"text": True, "encoding": "utf-8", "errors": "replace"}
@@ -103,7 +103,7 @@ index 3f711194..91b96e22 100644
          if not ok and result.returncode not in allowed_returncodes:
              logger.error(
                  "Git command failed: %s (rc=%d) stderr=%s",
-@@ -608,6 +654,9 @@ def _init_store(store: Path, working_dir: str) -> Optional[str]:
+@@ -595,6 +641,9 @@ def _init_store(store: Path, working_dir: str) -> Optional[str]:
          _migrate_legacy_store(base)
  
      if (store / "HEAD").exists():

@@ -1,32 +1,27 @@
-# Base tag: v0.23.2 (2026-11-16; registry publish 2026-11-16T20:59Z) -- the patch rollup over
-# v0.23.1: ~1,989 merged PRs / 7,918 non-merge commits (5,211 files, +239,733/-22,788, 940
-# closed issues). Upstream deferred the curated notes for this window to v0.24.0 again
+# Base tag: v0.23.3 (2026-11-19; registry publish 2026-11-20T00:34Z) -- the patch rollup over
+# v0.23.2: 1,657 non-merge commits / 3,948 files (+222,379/-96,154), 370 merged PRs and 60
+# closed issues (measured at caafe5389ae). Upstream again deferred the curated notes to v0.24.0
 # ("undocumented here on purpose"), so the drift check further down -- not the release text --
-# is what gates this bump; the notes only name client-side fixes (desktop/TUI stream settle,
-# duplicate "Recovered reply" on Telegram, webapp sign-in routing, CLI update-check leaving
-# `git` running), none of which touches this child image.
-# `nousresearch/hermes-agent:v0.23.2` multi-arch index digest
-# sha256:d6746a084e9341baada483e3d6210444d3c1aeb7c130f0915150065fb2851459 (read back from
-# the registry over the Docker Hub manifest API: pull token -> HEAD /v2/.../manifests/v0.23.2
-# with the manifest.list accept header -> docker-content-digest), so this pin and the promoted
-# release image cannot drift apart. v0.23.1's index digest was sha256:276d4468...; the same
+# gates this bump. The notes name only client/infra work (prompt-cache lifecycle, compaction
+# archiving, the storage-layer split, first-run CLI, new models, plugin catalog), none of which
+# removes a patch target; the real-apply below confirms all 16 still apply.
+# `nousresearch/hermes-agent:v0.23.3` multi-arch index digest
+# sha256:3e9fe4c6ef36490f43aa0d0d80f9df64e9c92a576eee3042f1a97c8813c05355 (read back from the
+# registry over the Docker Hub manifest API: pull token -> HEAD /v2/.../manifests/v0.23.3 with
+# the manifest.list accept header -> docker-content-digest), so this pin and the promoted
+# release image cannot drift apart. v0.23.2's index digest was sha256:d6746a08...; the same
 # read-back is the cheapest way to re-verify a bump.
 #
 # Base runtime, read from pm/lock.json of the tagged tree: python 3.14.9 (build 20261021),
-# node v26.12.1, npm 12.2.2, uv 0.13.5, pnpm 12.15.0. python/node/uv/pnpm are IDENTICAL to the
-# v0.23.1 values; npm moved 12.0.2 -> 12.2.2, which only affects the clawmem global install
-# below (--prefix / --allow-scripts are unchanged in 12.2.x; asserted by the build). The other
-# lockfile bumps -- chromium 145 -> 156, git 2.53.0 -> 2.56.1, llama.cpp b11671 -> b12144 --
-# are base-internal: this deployment pins Chromium on the volume via config.yaml's
-# --executablePath, and never runs the bundled llama.cpp builds.
-# The base Dockerfile changed across v0.23.1 -> v0.23.2 in TWO build-only hunks: the chromium
-# executable-path comment for arm64 was corrected, and the uv-cache lock normalisation now also
-# strips the world-write bit from lock files (`find /opt/hermes/uv-cache ... -exec chmod o-w`).
-# It pins no Debian digest and runs no workspace build, so the two tool venvs below need no
-# re-derivation.
+# node v26.12.1, npm 12.2.2, uv 0.13.5, pnpm 12.15.0 -- IDENTICAL to v0.23.2. The only
+# package-version change in the whole lockfile is cua-driver 0.21.0 -> 0.52.0 (desktop
+# automation, never used here); chromium 156, git 2.56.1 and llama.cpp b12144 are unchanged.
+# The base Dockerfile is BYTE-IDENTICAL to v0.23.2 (md5 62c241b3...), so no build-only hunk
+# needs re-derivation and the two tool venvs below are untouched.
+# [tool.uv] exclude-newer is STILL "3 days", so the /tmp installs below still bypass it.
 # SQLITE_AUTOCONF_VERSION is STILL 3530400, so the sqlite CLI pin below is untouched.
 
-ARG HERMES_AGENT_VERSION=v0.23.2
+ARG HERMES_AGENT_VERSION=v0.23.3
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
@@ -34,14 +29,14 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG OFFICECLI_VERSION=v1.0.162
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
-ARG PPT_MASTER_VERSION=v6.9.0
+ARG PPT_MASTER_VERSION=v6.10.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.150.1
+ARG DOCLING_VERSION=2.151.1
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=331fa474e26e428e2e6af1143b2fdab19cee492d7d21897b8899ce1c14755662
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.29.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=7b27accfa545169ad070efb8a6679b25d63acc8513bbc0c05937c3ce94c13ea5
 ARG PDFCPU_VERSION=0.16.4
 ARG PDFCPU_ASSET_URL=https://github.com/pdfcpu/pdfcpu/releases/download/v${PDFCPU_VERSION}/pdfcpu_${PDFCPU_VERSION}_Linux_x86_64.tar.xz
-ARG BUN_VERSION=1.4.4
+ARG BUN_VERSION=1.4.5
 ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
@@ -68,8 +63,8 @@ ARG CLAWMEM_VERSION=0.43.6
 ARG RTK_VERSION=v1.1.0
 ARG RTK_ASSET=rtk-oss-x86_64-unknown-linux-musl.tar.gz
 ARG RTK_ASSET_SHA256=4dec94a64035e08189ae82fd5408fe4ae9ae27a665fc07e3e3ec3c4c2d8e8a3e
-ARG GH_VERSION=v2.104.0
-ARG GH_ASSET=gh_2.104.0_linux_amd64.tar.gz
+ARG GH_VERSION=v2.105.0
+ARG GH_ASSET=gh_2.105.0_linux_amd64.tar.gz
 ARG GH_ASSET_URL=https://github.com/cli/cli/releases/download/${GH_VERSION}/${GH_ASSET}
 # Official sqlite3 CLI matching the base image's bundled libsqlite3 3.53.4 in
 # /usr/local/lib. Debian's /usr/bin/sqlite3 (compiled against 3.46.1) resolves
@@ -267,6 +262,17 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # full context in the regenerated diff. The other ten applied fuzz 0 unchanged (offsets only:
 # 011 +28/+7/+11x3/+56x6, 014 +69, 015 +1/+1/+2, 018 +64/+31, 032 +25, 035 +1/+1/+5,
 # 036 +1/+21, 038 +37x2; 007 and 016 emitted no offset line at all).
+# As of v0.23.3 (2026-11-20) the roster is 16 patches: this bump RETIRED NOTHING and
+# RE-ANCHORED FOUR (015, 016, 037, 038). v0.23.3 moved the checkpoint manager from
+# tools/checkpoint_manager.py to agent/checkpoints/manager.py (the storage-layer split), so
+# 015 (one DEFAULT_EXCLUDES entry) and 016 (bare-repo self-heal + retry) were re-derived
+# against the new module -- path change only, zero semantic change. The same release
+# refactored _replay_reasoning_items to return _ReplayItem(position, wire) objects; 037's two
+# adapter hunks and 038's synthetic-item append were re-anchored onto that shape (the pad goes
+# into `wire` before from_stored, and the synthetic item is wrapped in
+# _ReplayItem.from_stored({}, ...) so the later sorted(...) has a position). A plain dict
+# there would have raised AttributeError on the first orphan turn. The other twelve applied
+# fuzz 0 unchanged on a full pristine v0.23.3 tarball; zero .rej.
 # As of v0.23.2 (2026-11-17) the roster is 16 patches: this bump RETIRED NOTHING and
 # RE-ANCHORED ONE (007), because upstream moved tools/send_message_senders.py to
 # gateway/outbound/senders.py (the tool entrypoint stays in send.py; the per-platform
@@ -926,6 +932,48 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   (latest) and the sqlite CLI pin at 3530400 (SQLITE_AUTOCONF_VERSION is still 3530400 in the
 #   v0.22.7 base Dockerfile).
 #
+# 2026-11-20 sweep (v0.23.2 -> v0.23.3; docker index digest sha256:3e9fe4c6...): roster stays at
+#   16. ZERO RETIRE, FOUR RE-ANCHORS (015, 016, 037, 038). Evidence:
+#   (a) real-apply on a pristine v0.23.3 tree (codeload tarball of tag v0.23.3) in
+#       lexicographic order -> first pass 12/16 rc=0 with zero fuzz; 015/016 could not find
+#       tools/checkpoint_manager.py (moved to agent/checkpoints/manager.py), 037 FAILED two
+#       adapter hunks after the _ReplayItem refactor, and 038 applied only with fuzz 1 and
+#       appended a bare dict where the consumer now expects _ReplayItem. After the re-anchors:
+#       16/16 rc=0, zero fuzz, zero .rej/.orig.
+#   (b) all 22 touched files py_compile clean (runtime venv, python 3.14.9); ruff check per
+#       file identical error counts to pristine on every one; 13/13 touched modules import
+#       under the runtime venv.
+#   (c) upstream-coverage / issue re-query, 2026-11-20 (all still unmerged): #77100
+#       CLOSED-not-merged -> 007 stays. #44347 OPEN -> 008 stays. #85207 OPEN + PR #85285
+#       CLOSED-not-merged -> 011 stays. #85713 CLOSED-not-merged -> 014 stays a vendor
+#       deviation. #78929/#78944 OPEN -> 015 stays. #65349/#83036 OPEN -> 016 stays. #133799
+#       OPEN/DRAFT + #133792 OPEN -> 037/038 stay. #146765 / #109061 OPEN -> 040/041 stay.
+#       #138895/#138896 CLOSED-not-merged (Mattermost, never touches Matrix's `/` stamping)
+#       -> 036 stays. 042 is deployment-local and upstream's `class Pnpm` still has no
+#       `optional` flag -> stays. No patch is superseded by a v0.23.3 fix in another form:
+#       every marked bug is still present in the pristine tree (008's file_read toolset,
+#       011's active_turn_owner_alive, 014's response_format, 032's _skill_diff_char_budget,
+#       035's reaction hook, 036's bare-prefix stamping, 039's write_approval_scope,
+#       040/041's scheduler_mcp all absent).
+#   (d) behaviour probes on the patched tree: a fresh checkpoint store's info/exclude carries
+#       node-compile-cache/, and a store with refs/ + branches/ deleted returns rc=0 from
+#       _run_git after the self-heal. DeepSeek: a persisted reasoning item gains
+#       content[{type:reasoning_text}]; an orphan turn synthesizes one _ReplayItem from the
+#       turn's own reasoning_content (or " "); _preflight_encrypted forwards both.
+#   (e) ClawMem roster untouched: clawmem is still npm-latest 0.43.6 (re-checked
+#       2026-11-20), so all six patches still apply to the same packed package, zero fuzz.
+#
+#   Component pins bumped in the same commit (each checked against its registry, not the docs):
+#   ppt-master v6.9.0 -> v6.10.0 (root requirements.txt BYTE-IDENTICAL between the two tags, so
+#   the venv dependency set is unchanged; archive top dir ppt-master-6.10.0/); docling
+#   2.150.1 -> 2.151.1 (2026-11-19 patch release; docling-slim[standard] still wants
+#   torch<3,>=2.2.2 + torchvision<1, so the 2.14.1+cpu / 0.29.1+cpu pair stays); bun 1.4.4 ->
+#   1.4.5 (baseline asset + SHASUMS256.txt present); gh v2.104.0 -> v2.105.0 (asset
+#   gh_2.105.0_linux_amd64.tar.gz, 15,050,573 bytes). UNCHANGED on purpose: officecli v1.0.162
+#   (latest), pdfcpu 0.16.4 (latest), clawmem 0.43.6 (latest), rtk v1.1.0 (v1.2.x musl still
+#   SIGILLs on this host: no AVX, and no needed feature), rtk-hermes 1.2.3 (latest), the torch
+#   pair, sqlite 3530400 (base Dockerfile unchanged).
+#
 # 2026-11-17 sweep (v0.23.1 -> v0.23.2; docker index digest sha256:d6746a08...): roster stays at
 #   16. ZERO RETIRE, ONE RE-ANCHOR (007). Evidence:
 #   (a) real-apply on a pristine v0.23.2 tree (full codeload tarball of commit 28f57ed) in
@@ -1080,7 +1128,8 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   with Permission denied (rc=128) and affected workdirs get zero checkpoints.
 #   Adds the exclude + _ensure_store_excludes() so existing stores also pick it
 #   up. Trimmed to tools/checkpoint_manager.py (PR tests excluded). Keep until
-#   #78929/#78944 merge upstream. RE-ANCHORED on the v0.21.6 bump: upstream
+#   #78929/#78944 merge upstream. v0.23.3 moved that module to
+#   agent/checkpoints/manager.py; the patch was re-anchored there (path-only). RE-ANCHORED on the v0.21.6 bump: upstream
 #   reformatted DEFAULT_EXCLUDES to one pattern per line with a comment per
 #   group and reshaped _init_store, so both the list hunk and the init hunk were
 #   rewritten. _ensure_store_excludes() is now append-only (an operator's own
