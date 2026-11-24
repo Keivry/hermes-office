@@ -1,6 +1,6 @@
 hermes-office local patch — NOT an upstream pull request.
 
-Target: clawmem@0.43.5, applied against the installed npm package root
+Target: clawmem@0.43.8, applied against the installed npm package root
 (/usr/local/lib/node_modules/clawmem), AFTER 036 and 040 (this patch builds on
 040's separate query-expansion lane).
 
@@ -214,7 +214,7 @@ Measured against the production expandQuery path (real store, real DB):
 -import { monoNow, deadlineAfter, earliest, isExpired, timeoutSignal, type DurationMs, type MonoDeadline, isoNow, toDate, epochNow, epochMs } from "./clock.ts";
 +import { monoNow, deadlineAfter, earliest, isExpired, timeoutSignal, duration, type DurationMs, type MonoDeadline, isoNow, toDate, epochNow, epochMs } from "./clock.ts";
  import { COMPACTION_STATE_DDL, fenceEvolutionWriters, notLegacyArtifactSql, notLegacyTaintedEvolutionSql, resetLegacyDerivedNotes } from "./compaction-state.ts";
- import { clampRelationWeight } from "./relation-weight.ts";
+ import { clampRelationWeight, assertSemanticThreshold } from "./relation-weight.ts";
  import { freshStamp, hasStopStamps, installStopPipelineSchema, stampAssign, stampInsert } from "./stop-schema.ts";
 @@ -5090,6 +5090,22 @@
    });

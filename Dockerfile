@@ -1,37 +1,35 @@
-# Base tag: v0.23.3 (2026-11-19; registry publish 2026-11-20T00:34Z) -- the patch rollup over
-# v0.23.2: 1,657 non-merge commits / 3,948 files (+222,379/-96,154), 370 merged PRs and 60
-# closed issues (measured at caafe5389ae). Upstream again deferred the curated notes to v0.24.0
-# ("undocumented here on purpose"), so the drift check further down -- not the release text --
-# gates this bump. The notes name only client/infra work (prompt-cache lifecycle, compaction
-# archiving, the storage-layer split, first-run CLI, new models, plugin catalog), none of which
-# removes a patch target; the real-apply below confirms all 16 still apply.
-# `nousresearch/hermes-agent:v0.23.3` multi-arch index digest
-# sha256:3e9fe4c6ef36490f43aa0d0d80f9df64e9c92a576eee3042f1a97c8813c05355 (read back from the
-# registry over the Docker Hub manifest API: pull token -> HEAD /v2/.../manifests/v0.23.3 with
+# Base tag: v0.23.4 (2026-11-23; registry publish 2026-11-24T08:17Z) -- the patch rollup over
+# v0.23.3: 1,122 non-merge commits / 1,316 files (+96,873/-6,703), 229 merged PRs and 281
+# closed issues (measured at 8fc03744473). Upstream again ships a stub release and defers the
+# curated notes to v0.24.0, so the drift check further down -- not the release text -- gates
+# this bump. The notes name only client/infra work (Desktop streaming, gateway migration,
+# plugin config, dashboard auth, skill-index description width, new models/catalog entries);
+# none removes a patch target; the real-apply below confirms all 16 still apply.
+# `nousresearch/hermes-agent:v0.23.4` multi-arch index digest
+# sha256:ef0650d523ee1b5ab32c779acabc446d9936869a9932591553688a62bcf0c42f (read back from the
+# registry over the Docker Hub manifest API: pull token -> HEAD /v2/.../manifests/v0.23.4 with
 # the manifest.list accept header -> docker-content-digest), so this pin and the promoted
-# release image cannot drift apart. v0.23.2's index digest was sha256:d6746a08...; the same
+# release image cannot drift apart. v0.23.3's index digest was sha256:3e9fe4c6...; the same
 # read-back is the cheapest way to re-verify a bump.
 #
 # Base runtime, read from pm/lock.json of the tagged tree: python 3.14.9 (build 20261021),
-# node v26.12.1, npm 12.2.2, uv 0.13.5, pnpm 12.15.0 -- IDENTICAL to v0.23.2. The only
-# package-version change in the whole lockfile is cua-driver 0.21.0 -> 0.52.0 (desktop
-# automation, never used here); chromium 156, git 2.56.1 and llama.cpp b12144 are unchanged.
-# The base Dockerfile is BYTE-IDENTICAL to v0.23.2 (md5 62c241b3...), so no build-only hunk
-# needs re-derivation and the two tool venvs below are untouched.
+# node v26.12.1, npm 12.2.2, uv 0.13.5, pnpm 12.15.0 -- IDENTICAL to v0.23.3 (pm/lock.json is
+# byte-identical across the two tags). The base Dockerfile is BYTE-IDENTICAL too, so no
+# build-only hunk needs re-derivation and the two tool venvs below are untouched.
 # [tool.uv] exclude-newer is STILL "3 days", so the /tmp installs below still bypass it.
 # SQLITE_AUTOCONF_VERSION is STILL 3530400, so the sqlite CLI pin below is untouched.
 
-ARG HERMES_AGENT_VERSION=v0.23.3
+ARG HERMES_AGENT_VERSION=v0.23.4
 ARG HERMES_OFFICE_VERSION=${HERMES_AGENT_VERSION}
 FROM nousresearch/hermes-agent:${HERMES_AGENT_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG OFFICECLI_VERSION=v1.0.162
+ARG OFFICECLI_VERSION=v1.0.163
 ARG OFFICECLI_ASSET=officecli-linux-x64
 ARG OFFICECLI_REPO=iOfficeAI/OfficeCli
 ARG PPT_MASTER_VERSION=v6.10.0
 ARG PPT_MASTER_ARCHIVE_URL=https://github.com/hugohe3/ppt-master/archive/refs/tags/${PPT_MASTER_VERSION}.tar.gz
-ARG DOCLING_VERSION=2.151.1
+ARG DOCLING_VERSION=2.152.0
 ARG TORCH_CPU_WHL=https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=331fa474e26e428e2e6af1143b2fdab19cee492d7d21897b8899ce1c14755662
 ARG TORCHVISION_CPU_WHL=https://download.pytorch.org/whl/cpu/torchvision-0.29.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl#sha256=7b27accfa545169ad070efb8a6679b25d63acc8513bbc0c05937c3ce94c13ea5
 ARG PDFCPU_VERSION=0.16.4
@@ -40,7 +38,7 @@ ARG BUN_VERSION=1.4.5
 ARG BUN_ASSET_NAME=bun-linux-x64-baseline.zip
 ARG BUN_ASSET_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ASSET_NAME}
 ARG BUN_SHASUMS_URL=https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt
-ARG CLAWMEM_VERSION=0.43.6
+ARG CLAWMEM_VERSION=0.43.8
 # RTK ships two editions from the same tag: `rtk-<target>` (Apache-2.0 CLI linking the
 # BUSL-1.1 `rtk-engine`) and `rtk-oss-<target>` (Apache-2.0 only). This image takes the
 # oss edition: v1.0.0 split the compression engine out under BUSL-1.1 (source-available,
@@ -262,6 +260,12 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # full context in the regenerated diff. The other ten applied fuzz 0 unchanged (offsets only:
 # 011 +28/+7/+11x3/+56x6, 014 +69, 015 +1/+1/+2, 018 +64/+31, 032 +25, 035 +1/+1/+5,
 # 036 +1/+21, 038 +37x2; 007 and 016 emitted no offset line at all).
+# As of v0.23.4 (2026-11-24) the roster is 16 patches: this bump RETIRED NOTHING and needed
+# ZERO RE-ANCHORS. All 16 applied fuzz 0 on a pristine v0.23.4 tree. Upstream changed only four
+# of the patch-target files (cron/scheduler.py run_job restructure, gateway/run_startup.py status
+# reporter, the Matrix adapter's mkdir_under_hermes_home calls, skill_manager_tool's desc-limit
+# wiring) and every one of those changes landed outside the patched hunks. No cited PR moved:
+# #77100/#85285/#85713/#138896/#99680 remain CLOSED-unmerged and #133799/#146765/#109061 OPEN.
 # As of v0.23.3 (2026-11-20) the roster is 16 patches: this bump RETIRED NOTHING and
 # RE-ANCHORED FOUR (015, 016, 037, 038). v0.23.3 moved the checkpoint manager from
 # tools/checkpoint_manager.py to agent/checkpoints/manager.py (the storage-layer split), so
@@ -931,6 +935,30 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 #   v2.103.3. UNCHANGED on purpose: bun 1.4.4 (latest), clawmem 0.43.5 (latest), rtk-hermes 1.2.3
 #   (latest) and the sqlite CLI pin at 3530400 (SQLITE_AUTOCONF_VERSION is still 3530400 in the
 #   v0.22.7 base Dockerfile).
+#
+# 2026-11-24 sweep (v0.23.3 -> v0.23.4; docker index digest sha256:ef0650d5...): roster stays at
+#   16. ZERO RETIRE, ZERO RE-ANCHORS. Evidence:
+#   (a) real-apply on a pristine v0.23.4 tree in lexicographic order -> 16/16 rc=0, zero fuzz,
+#       zero .rej/.orig. (042 needs pm/packages.py checked out explicitly: that patch has no
+#       `diff --git` header, so a sparse tree built from those headers misses its target; the
+#       hunk lands at +6 exactly as on v0.23.3 and the file is unchanged across these tags.)
+#   (b) upstream diff over the 21 patch-target files touched only four, all outside the patched
+#       hunks (see the roster note above); marker greps found no equivalent implementation.
+#   (c) ancestry re-check: cited PRs unchanged -- #77100/#85285/#85713/#138896/#99680 CLOSED-not-
+#       merged, #133799/#146765/#109061 OPEN -- so nothing is superseded by another commit.
+#   (d) config schema unchanged: hermes_cli/config_migrations.py is identical between tags and
+#       the ladder still ends at step 54; no config-migration work for this bump.
+#   (e) ClawMem 0.43.6 -> 0.43.8 (npm latest): all six patches apply, but 041's store.ts import
+#       hunk needed a re-anchor -- 0.43.8 added `assertSemanticThreshold` to the adjacent
+#       relation-weight import, which pushed the old context to fuzz 2; regenerated at fuzz 0.
+#       The Dockerfile's semantic assertions (14 greps + Bun TS export scan) pass on the packed
+#       and patched 0.43.8 tree.
+#   (f) components: officecli v1.0.162 -> v1.0.163 (asset is still the bare
+#       officecli-linux-x64 ELF); docling 2.151.1 -> 2.152.0 (2026-11-23 patch release;
+#       docling-slim[standard] still wants torch>=2.2.2,<3 and torchvision<1, so the
+#       2.14.1+cpu / 0.29.1+cpu pair stays). UNCHANGED on purpose: ppt-master v6.10.0, pdfcpu
+#       0.16.4, bun 1.4.5, gh v2.105.0, rtk v1.1.0 (v1.2.x musl still SIGILLs on this no-AVX
+#       host) and the sqlite CLI pin at 3530400.
 #
 # 2026-11-20 sweep (v0.23.2 -> v0.23.3; docker index digest sha256:3e9fe4c6...): roster stays at
 #   16. ZERO RETIRE, FOUR RE-ANCHORS (015, 016, 037, 038). Evidence:
