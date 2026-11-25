@@ -1,0 +1,122 @@
+# 043 = deployment-local fix for the nightly "no MCP tool registered" cron tick.
+#   Not upstream (yet): the stripping predicate below looks like an upstream regression
+#   introduced with the per-scope MCP overlay; file an upstream issue before retiring.
+#
+# Why: every scheduled tick since the v0.22.7 upgrade runs without
+#   mcp__chrome_devtools__* while the same gateway PID serves 33 tools to interactive
+#   sessions. Log signature (agent.log, every 00:30/06:00 tick):
+#     cron.scheduler_mcp: MCP scope=/opt/data configured=1 (chrome-devtools) not_connected=-
+#     cron.scheduler_mcp: MCP recovery deadline reached: chrome-devtools
+#     cron.scheduler_mcp: no MCP tool registered for this run ... -- scheduled tools stay off
+#   No "MCP revival 'chrome-devtools' -> ..." line appears: 041's revival never runs.
+#
+#   Root cause, two independent defects that reinforce each other:
+#   1. mcp_servers_ready() only checks that a server OBJECT exists for the scope. A stdio
+#      session recycled by idle_timeout_seconds (900s) still passes it (no connect error,
+#      no park). 041 gates _revive_one() on that set, so the dormant server is never
+#      re-woken; wait_for_recovery() then waits out the full 15s and returns zero tools.
+#   2. discover_mcp_tools() calls register_connected_into_current_scope() first. Its stale
+#      sweep treats "session is None" as a dead connection and silently deregisters that
+#      scope's MCP tool entries -- but a recycled stdio server is intentionally dormant and
+#      its check_fn still advertises the tools (_make_check_fn treats _is_recycled_stdio()
+#      as connected). The entries are dropped, then the revival path cannot re-publish them:
+#      reconnect keeps _registered_tool_names non-empty and deliberately skips registration.
+#
+# What it does:
+#   * mcp_tool_registration: a recycled stdio connection is not stale -- keep the scope's
+#     tool registrations until the session is re-woken or the server actually parks/fails.
+#     Config removal/disable and route/credential mismatches still strip, unchanged.
+#   * scheduler_mcp: gate the revival set on the same _registered_and_ready() predicate
+#     wait_for_recovery() uses, so a dormant or overlay-less server is actually revived.
+#   * scheduler_mcp: _ensure_registered() re-publishes this scope's entries after a wake
+#     when they are missing (idempotent; a healthy registration returns False).
+#
+# Verified on v0.23.4 (see commands in the delivery report): patch -p1 --dry-run and real
+#   apply rc=0 on a pristine copy of both targets, reverse dry-run rc=0, zero fuzz/.rej/.orig,
+#   py_compile clean, and a fake-server unit check of _ensure_registered (missing entries ->
+#   re-register once; healthy entries -> no-op).
+# Runtime files only: cron/scheduler_mcp.py, tools/mcp_tool_registration.py
+# Retire when the upstream fix lands and HERMES_AGENT_VERSION is bumped.
+
+--- a/tools/mcp_tool_registration.py
++++ b/tools/mcp_tool_registration.py
+@@ -587,7 +587,8 @@
+             config = judged[name]
+             cross_profile = _key_scope(key) != scope
+             if (config is None or not mcp_server_enabled(config) or server is None
+-                    or getattr(server, "session", None) is None
++                    or (getattr(server, "session", None) is None
++                        and not server._is_recycled_stdio())
+                     or not _same_server_route(server, config, cross_profile=cross_profile,
+                                               resolved_identity=resolved_ids.get(name))):
+                 stale.append(key)
+--- a/cron/scheduler_mcp.py
++++ b/cron/scheduler_mcp.py
+@@ -125,6 +125,27 @@
+     return "connected"
+ 
+ 
++def _ensure_registered(name: str, server, config: dict) -> bool:
++    """Re-publish this server's tools when this run's registry lost their entries.
++
++    ``_register_connected_into_current_scope`` only heals a *shared* connection's overlay; an
++    owned connection whose scope entries were dropped (a tick that ran while its stdio session
++    was recycled strips them as stale) keeps ``_registered_tool_names`` non-empty, so the
++    reconnect path deliberately skips re-registration and the run stays tool-less. Register
++    again here when the names no longer resolve. Idempotent: a healthy registration returns
++    False without touching the registry.
++    """
++    from tools.registry import registry
++    from tools.mcp_tool_registration import _register_server_tools
++
++    names = list(getattr(server, "_registered_tool_names", []) or ())
++    if names and all(registry.get_entry(tool_name) is not None for tool_name in names):
++        return False
++    registered = _register_server_tools(name, server, config)
++    server._registered_tool_names = sorted(set(names) | set(registered))
++    return bool(registered)
++
++
+ def _revive_one(name: str, config: dict, deadline: float, job_id: str) -> str:
+     """Bring one configured server back for this run; returns the outcome for the log line."""
+     from tools import mcp_tool as core
+@@ -142,12 +163,16 @@
+         if server._park_reason and "permanent" in server._park_reason:
+             return "parked(permanent)"
+         if server.session is not None:
+-            # Live transport, but this scope may still lack dispatch entries: heal the overlay
+-            # rather than paying for a second process.
++            # Live transport, but this run's scope may still lack dispatch entries: heal the
++            # shared overlay and re-publish this scope's own registrations when they are gone.
+             healed = register_connected_into_current_scope({name: config})
++            if _ensure_registered(name, server, config):
++                return "repaired"
+             return f"healed({healed})" if healed else "live_but_unregistered"
+         if server._is_recycled_stdio():
+-            return "reconnected" if _request_lazy_reconnect(name, server) else "reconnect_failed"
++            if not _request_lazy_reconnect(name, server):
++                return "reconnect_failed"
++            return "repaired" if _ensure_registered(name, server, config) else "reconnected"
+         if server._task is not None and not server._task.done():
+             return "recovering"
+     healed = register_connected_into_current_scope({name: config})
+@@ -184,7 +209,18 @@
+             "Job '%s': MCP config resolves to zero enabled servers under this run's scope (%s); "
+             "scheduled MCP tools stay off", job_id, core._mcp_registry_scope())
+         return []
+-    ready = set(mcp_servers_ready())
++    from tools.mcp_tool_scope import _resolve_server_key
++
++    # ``mcp_servers_ready`` only proves a server object exists for the scope; a recycled stdio
++    # session or a dropped registry overlay also passes it. Gate on the same dispatchable-state
++    # predicate ``wait_for_recovery`` uses, or a dormant server is never revived and the tick
++    # waits out its whole budget for tools that cannot appear.
++    ready = set()
++    for _name in mcp_servers_ready():
++        with core._lock:
++            _server = core._servers.get(_resolve_server_key(_name))
++        if _server is not None and _registered_and_ready(_name, _server, configured[_name]):
++            ready.add(_name)
+     for name in sorted(configured):
+         if name in ready:
+             continue

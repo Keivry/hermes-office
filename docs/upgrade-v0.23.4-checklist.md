@@ -6,8 +6,9 @@ check order** — run it top to bottom after the new image is deployed.
 
 - Upstream base: `nousresearch/hermes-agent:v0.23.4`
   (index digest `sha256:ef0650d523ee1b5ab32c779acabc446d9936869a9932591553688a62bcf0c42f`)
-- Patch roster: 16 (`007, 008, 011, 014, 015, 016, 018, 032, 035, 036, 037, 038, 039, 040, 041, 042`)
-  — **zero retired, zero re-anchored** (16/16 apply at fuzz 0)
+- Patch roster: 17 as of 2026-11-25 (`007, 008, 011, 014, 015, 016, 018, 032, 035, 036, 037, 038, 039, 040, 041, 042, 043`)
+  — the v0.23.4 bump itself retired nothing and re-anchored nothing (16/16 applied at fuzz 0);
+  043 was **added after the bump** on the same base (16 → 17) and also applies at fuzz 0
 - ClawMem patch roster: 6 (`036, 040, 041, 042, 043, 044`), verified against clawmem 0.43.8
   (041's `store.ts` import hunk re-anchored for 0.43.8; the other five unchanged)
 - Config schema: **54**, unchanged — `hermes_cli/config_migrations.py` is identical between the
@@ -58,8 +59,8 @@ Image rollback: change the compose tag back to `ghcr.io/keivry/hermes-office:v0.
    A `pull` alone does not replace a running container — the container must be recreated.
 2. In the container: `hermes --version` must print `v0.23.4`.
 3. Check the patch layer really contains the patches (not just "the RUN command succeeded"):
-   the expected patch surface is **22 files modified + `cron/scheduler_mcp.py` (new)**.
-   Spot checks:
+   the expected patch surface is **23 files: 22 modified + `cron/scheduler_mcp.py` (created by
+   040)**. Spot checks:
 
    ```bash
    grep -n 'node-compile-cache' /opt/hermes/agent/checkpoints/manager.py
@@ -68,9 +69,11 @@ Image rollback: change the compose tag back to `ghcr.io/keivry/hermes-office:v0.
    grep -n '_ReplayItem.from_stored({}' /opt/hermes/agent/codex_responses_adapter.py
    grep -n '^import asyncio' /opt/hermes/gateway/outbound/senders.py
    grep -n '_matrix_bridge_to_adapter_loop' /opt/hermes/gateway/outbound/senders.py
+   grep -n '_is_recycled_stdio' /opt/hermes/tools/mcp_tool_registration.py
+   grep -n '_ensure_registered' /opt/hermes/cron/scheduler_mcp.py
    ```
 
-   All six must hit. No path moved in this bump, so a miss means the patch layer is wrong,
+   All eight must hit. No path moved in this bump, so a miss means the patch layer is wrong,
    not that the module was relocated.
 
 ## 2. Config migration
@@ -168,6 +171,12 @@ ls -l /opt/data/home/.local/bin/chrome-devtools-mcp
 - Run one job manually: deliver path, tool surface, and MCP registration are the three things
   that historically break across a base bump.
 - Check `hermes cron` output for `Script Error` / missing interpreter, which points back to §3.
+- **MCP revival (043)**: after ≥15 min of MCP idleness (the `idle_timeout_seconds` recycle), a
+  tick must log `MCP revival 'chrome-devtools' -> repaired` (or `-> reconnected`) and
+  `N MCP tool(s) available`. The failure signature 043 removes is the triple
+  `MCP recovery deadline reached: <name>` + `no MCP tool registered for this run ...` +
+  `scheduled tools stay off this tick`, with no revival line. A first tick right after a
+  gateway restart can pass without exercising the patch — force a recycle before judging it.
 
 ## 9. Post-deploy smoke (in the container)
 

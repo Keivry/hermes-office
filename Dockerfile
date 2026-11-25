@@ -335,6 +335,31 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # Verified: dry-run and real apply rc=0 with zero fuzz/.rej on the 15-patch tree,
 # py_compile + repo ruff clean, check_structure clean, and a drift() probe that reports
 # {pnpm, node} before the patch and {node} after it.
+# 043 was ADDED on 2026-11-25 WITHOUT a base bump (roster 16 -> 17). It is a FOLLOW-UP to
+# 040/041 on the same nightly failure and closes the half those two left open. On v0.23.4 the
+# 00:30 tick still logged the same triple (the 06:00 tick too, harmlessly -- its job uses no
+# MCP tools):
+#   MCP scope=/opt/data configured=1 (chrome-devtools) not_connected=-
+#   MCP recovery deadline reached: chrome-devtools
+#   no MCP tool registered for this run ... -- scheduled tools stay off this tick
+# with no "MCP revival ..." line, while the same gateway PID served 33 tools to interactive
+# sessions and logs/mcp-stderr.log showed a clean handshake. Two defects, each sufficient on
+# its own: (1) mcp_servers_ready() counts a stdio session recycled by idle_timeout_seconds as
+# ready (it only checks that a server object exists for the scope), so 041's revive_and_wait()
+# skipped _revive_one() and spent the 15s budget observing nothing; (2) the overlay's stale
+# sweep in register_connected_into_current_scope() treated "session is None" as a dead
+# connection and deregistered the scope's MCP tools, after which the reconnect path skipped
+# re-registration because _registered_tool_names was already non-empty. 043 (a) spares
+# _is_recycled_stdio() in that stale predicate, (b) gates the revival set on the same
+# _registered_and_ready() predicate wait_for_recovery() uses, and (c) re-publishes through an
+# idempotent _ensure_registered() after the wake. idle_timeout_seconds stays at 900 on
+# purpose: 0 would pin the MCP to /opt/data/state/chrome-profile forever and break the
+# bridge fallback with profile_locked_by_gateway_mcp. Deployment-local, not an upstream PR;
+# retire it once upstream stops stripping dormant stdio entries (file the issue first -- the
+# predicate looks like a regression from the per-scope overlay work). Verified on a pristine
+# v0.23.4 tree: both hunks apply at fuzz 0 in lexicographic order after 042, no .rej/.orig,
+# py_compile clean, reverse dry-run clean, and a fake-server probe (dormant revived, healthy
+# skipped, register-once).
 # 17 were retired at v2026.9.11 (v0.21.2):
 # 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
 # timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the
