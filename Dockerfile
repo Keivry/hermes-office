@@ -360,6 +360,16 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
 # v0.23.4 tree: both hunks apply at fuzz 0 in lexicographic order after 042, no .rej/.orig,
 # py_compile clean, reverse dry-run clean, and a fake-server probe (dormant revived, healthy
 # skipped, register-once).
+# 044 was ADDED on 2026-11-26 WITHOUT a base bump (roster 17 -> 18). Self-hosted
+# Firecrawl (172.16.2.168:3002, latest open-source build) rejects firecrawl-py's
+# unconditional scrape defaults maxAge/storeInCache with 400 "Unrecognized key in body";
+# upstream main still injects them, so upgrading either side does not fix it. The direct
+# self-hosted route now uses the plugin's existing v2 REST client ({url, formats,
+# timeout} / {query, limit}) instead of the SDK; a cloud URL, the managed gateway and
+# the keyless ring keep their current clients. Behavior-verified RED -> GREEN against
+# the live instance: pristine 400 on example.com, patched 958 chars and search 200.
+# Re-anchor on _KeylessFirecrawlClient.__init__/_post and the client-construction block
+# in _get_firecrawl_client(); retire when SDK injection stops for self-hosted endpoints.
 # 17 were retired at v2026.9.11 (v0.21.2):
 # 009/010 (empty tool_calls dedup + wire boundary), 012 (gateway stderr
 # timestamps) and 013 (update_cmd SyntaxWarning) went in earlier tags; the

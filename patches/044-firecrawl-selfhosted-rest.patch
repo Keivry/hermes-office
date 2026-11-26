@@ -1,0 +1,109 @@
+# 044 = self-hosted Firecrawl: stop the SDK injecting cloud-only cache defaults.
+#
+# Why: firecrawl-py's prepare_scrape_options() unconditionally fills
+#   {"max_age": 14400000, "store_in_cache": True} and maps them to maxAge/storeInCache
+#   before any request body is built. A self-hosted Firecrawl (open-source build, even
+#   the latest release) rejects both keys with 400 "Unrecognized key in body" -- verified
+#   against 172.16.2.168:3002: a bare POST /v2/scrape succeeds, the same payload plus
+#   either key fails, and upstream main still carries the defaults (checked 2026-11-26,
+#   so upgrading the SDK does not help). Until now every web_extract against the
+#   self-hosted instance burned one failed request and silently fell back to the keyless
+#   cloud ring ("one-shot keyless rescue" in tools.web_tools).
+#
+# What it does:
+#   * _is_self_hosted_direct(): identifies the direct route whose FIRECRAWL_API_URL is a
+#     non-cloud URL, matched by client cache key -- the managed-gateway route shares the
+#     "sdk" mode and a cloud URL stays on the SDK.
+#   * _get_firecrawl_client(): that route builds the existing minimal v2 REST client
+#     (_KeylessFirecrawlClient) instead of the SDK. It sends {"query","limit"} for search
+#     and {"url","formats",["timeout"]} for scrape -- the same shape the keyless ring
+#     already uses; both were verified 200 against the live self-hosted instance.
+#   * _KeylessFirecrawlClient: optional api_key adds a Bearer header, so a self-hosted
+#     instance that does require auth keeps working.
+#
+# Runtime files only: plugins/web/firecrawl/provider.py
+# Verified 2026-11-26 on a pristine v0.23.4 tree + the live self-hosted server:
+#   patch -p1 --dry-run / real apply / reverse dry-run rc=0; zero fuzz and zero .rej/.orig;
+#   py_compile clean; ruff check 23 -> 23 errors (zero new); check_structure.py
+#   STRUCTURE OK (+1 top-level function, 0 method changes).
+#   Behavior RED (pristine): client=Firecrawl, scrape error "Unrecognized keys:
+#   storeInCache, maxAge"; GREEN (patched): client=_KeylessFirecrawlClient, scrape
+#   success (958 chars) and search returns data.web. Controls: cloud URL -> Firecrawl,
+#   managed-gateway tuple -> False, keyless route -> unchanged.
+# Re-anchor on a base bump: anchors are _KeylessFirecrawlClient.__init__/_post and the
+#   client-construction block in _get_firecrawl_client(). Retire it when upstream stops
+#   injecting maxAge/storeInCache for self-hosted endpoints (not merely when the SDK
+#   gains another option).
+
+diff --git a/plugins/web/firecrawl/provider.py b/plugins/web/firecrawl/provider.py
++++ b/plugins/web/firecrawl/provider.py
+@@ -86,6 +86,25 @@
+     return None
+ 
+ 
++def _is_self_hosted_direct(
++    resolved: tuple | None, direct_config: tuple | None
++) -> bool:
++    """True when *resolved* is the direct route pointed at a self-hosted (non-cloud) Firecrawl.
++
++    Matched by cache key, not identity: the managed-gateway route shares the ``sdk`` mode but
++    must keep using the SDK (its proxy speaks the cloud schema)."""
++    if resolved is None or direct_config is None:
++        return False
++    mode, kwargs, client_config = resolved
++    api_url = (kwargs.get("api_url") or "").rstrip("/")
++    return (
++        mode == "sdk"
++        and client_config == direct_config[2]
++        and bool(api_url)
++        and api_url != _FIRECRAWL_CLOUD_API_URL
++    )
++
++
+ def _is_explicit_firecrawl_selection() -> bool:
+     from plugins.web.keyless_mcp import _web_config_selects
+     return _web_config_selects("firecrawl")
+@@ -111,13 +130,22 @@
+ 
+ class _KeylessFirecrawlClient:
+     """Minimal REST client for Firecrawl's keyless cloud mode; duck-types the SDK's
+-    ``search`` / ``scrape`` and never sends an Authorization header."""
++    ``search`` / ``scrape``. Sends no Authorization header unless *api_key* is given.
++
++    Self-hosted instances reuse this client: their ``/v2`` API takes the same payload,
++    while the SDK injects cloud-only defaults (``maxAge`` / ``storeInCache``) that
++    self-hosted builds reject with ``400 Unrecognized key``."""
+ 
+-    def __init__(self, api_url: str = _FIRECRAWL_CLOUD_API_URL):
++    def __init__(self, api_url: str = _FIRECRAWL_CLOUD_API_URL, api_key: str = ""):
+         self.api_url = api_url.rstrip("/")
++        self._headers = {"Content-Type": "application/json"}
++        if api_key:
++            self._headers["Authorization"] = f"Bearer {api_key}"
+ 
+     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+-        response = httpx.post(f"{self.api_url}{path}", json=payload, headers={"Content-Type": "application/json"}, timeout=60.0)
++        response = httpx.post(
++            f"{self.api_url}{path}", json=payload, headers=self._headers, timeout=60.0
++        )
+         try:
+             response.raise_for_status()
+         except httpx.HTTPStatusError as exc:
+@@ -216,7 +244,16 @@
+     cached = getattr(wt, "_firecrawl_client", None)
+     if cached is not None and getattr(wt, "_firecrawl_client_config", None) == client_config:
+         return cached
+-    wt._firecrawl_client = _KeylessFirecrawlClient(api_url=kwargs["api_url"]) if client_mode == "keyless" else Firecrawl(**kwargs)
++    if client_mode == "keyless":
++        wt._firecrawl_client = _KeylessFirecrawlClient(api_url=kwargs["api_url"])
++    elif _is_self_hosted_direct(resolved, direct_config):
++        # The SDK's scrape path always sends maxAge/storeInCache; self-hosted builds that
++        # predate those optional fields answer 400. Use the bare v2 REST payload instead.
++        wt._firecrawl_client = _KeylessFirecrawlClient(
++            api_url=kwargs["api_url"], api_key=kwargs.get("api_key", "")
++        )
++    else:
++        wt._firecrawl_client = Firecrawl(**kwargs)
+     wt._firecrawl_client_config = client_config
+     return wt._firecrawl_client
+ 

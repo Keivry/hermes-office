@@ -6,9 +6,11 @@ check order** — run it top to bottom after the new image is deployed.
 
 - Upstream base: `nousresearch/hermes-agent:v0.23.4`
   (index digest `sha256:ef0650d523ee1b5ab32c779acabc446d9936869a9932591553688a62bcf0c42f`)
-- Patch roster: 17 as of 2026-11-25 (`007, 008, 011, 014, 015, 016, 018, 032, 035, 036, 037, 038, 039, 040, 041, 042, 043`)
+- Patch roster: 18 as of 2026-11-26 (`007, 008, 011, 014, 015, 016, 018, 032, 035, 036, 037, 038, 039, 040, 041, 042, 043, 044`)
   — the v0.23.4 bump itself retired nothing and re-anchored nothing (16/16 applied at fuzz 0);
-  043 was **added after the bump** on the same base (16 → 17) and also applies at fuzz 0
+  043 was **added after the bump** on the same base (16 → 17) and also applies at fuzz 0;
+  044 was **added on 2026-11-26** (17 → 18, self-hosted Firecrawl REST route) and applies at
+  fuzz 0 on the same pristine tree
 - ClawMem patch roster: 6 (`036, 040, 041, 042, 043, 044`), verified against clawmem 0.43.8
   (041's `store.ts` import hunk re-anchored for 0.43.8; the other five unchanged)
 - Config schema: **54**, unchanged — `hermes_cli/config_migrations.py` is identical between the
@@ -59,7 +61,7 @@ Image rollback: change the compose tag back to `ghcr.io/keivry/hermes-office:v0.
    A `pull` alone does not replace a running container — the container must be recreated.
 2. In the container: `hermes --version` must print `v0.23.4`.
 3. Check the patch layer really contains the patches (not just "the RUN command succeeded"):
-   the expected patch surface is **23 files: 22 modified + `cron/scheduler_mcp.py` (created by
+   the expected patch surface is **24 files: 23 modified + `cron/scheduler_mcp.py` (created by
    040)**. Spot checks:
 
    ```bash
@@ -71,9 +73,11 @@ Image rollback: change the compose tag back to `ghcr.io/keivry/hermes-office:v0.
    grep -n '_matrix_bridge_to_adapter_loop' /opt/hermes/gateway/outbound/senders.py
    grep -n '_is_recycled_stdio' /opt/hermes/tools/mcp_tool_registration.py
    grep -n '_ensure_registered' /opt/hermes/cron/scheduler_mcp.py
+   grep -n '_is_self_hosted_direct' /opt/hermes/plugins/web/firecrawl/provider.py
+   grep -n '400 Unrecognized key' /opt/hermes/plugins/web/firecrawl/provider.py
    ```
 
-   All eight must hit. No path moved in this bump, so a miss means the patch layer is wrong,
+   All ten must hit. No path moved in this bump, so a miss means the patch layer is wrong,
    not that the module was relocated.
 
 ## 2. Config migration
